@@ -51,7 +51,8 @@ class DlnaRenderer(
 
     fun handleAv(action: String, args: Map<String, String>, requestUserAgent: String?): SoapResult {
         if (!instanceOk(args)) return SoapResult.fault(718, "Invalid InstanceID")
-        val result = when (action) {
+        val name = SoapCodec.canonical(action)
+        val result = when (name) {
             "SetAVTransportURI" -> setUri(
                 SoapCodec.arg(args, "CurrentURI").orEmpty(),
                 SoapCodec.arg(args, "CurrentURIMetaData").orEmpty(),
@@ -70,7 +71,7 @@ class DlnaRenderer(
             "GetMediaInfo" -> mediaInfo()
             "GetDeviceCapabilities" -> SoapResult.ok(
                 Upnp.AVT,
-                action,
+                name,
                 linkedMapOf(
                     "PlayMedia" to "NONE,NETWORK",
                     "RecMedia" to "NOT_IMPLEMENTED",
@@ -79,12 +80,12 @@ class DlnaRenderer(
             )
             "GetTransportSettings" -> SoapResult.ok(
                 Upnp.AVT,
-                action,
+                name,
                 linkedMapOf("PlayMode" to "NORMAL", "RecQualityMode" to "NOT_IMPLEMENTED"),
             )
             "GetCurrentTransportActions" -> SoapResult.ok(
                 Upnp.AVT,
-                action,
+                name,
                 linkedMapOf("Actions" to actions()),
             )
             else -> SoapResult.fault(401, "Invalid Action")
@@ -94,34 +95,36 @@ class DlnaRenderer(
 
     fun handleRc(action: String, args: Map<String, String>): SoapResult {
         if (!instanceOk(args)) return SoapResult.fault(718, "Invalid InstanceID")
-        return when (action) {
-            "GetVolume" -> SoapResult.ok(Upnp.RCS, action, linkedMapOf("CurrentVolume" to volume.toString()))
+        val name = SoapCodec.canonical(action)
+        return when (name) {
+            "GetVolume" -> SoapResult.ok(Upnp.RCS, name, linkedMapOf("CurrentVolume" to volume.toString()))
             "SetVolume" -> setVolume(SoapCodec.arg(args, "DesiredVolume"))
-            "GetMute" -> SoapResult.ok(Upnp.RCS, action, linkedMapOf("CurrentMute" to if (muted) "1" else "0"))
+            "GetMute" -> SoapResult.ok(Upnp.RCS, name, linkedMapOf("CurrentMute" to if (muted) "1" else "0"))
             "SetMute" -> setMute(SoapCodec.arg(args, "DesiredMute"))
-            "ListPresets" -> SoapResult.ok(Upnp.RCS, action, linkedMapOf("CurrentPresetNameList" to "FactoryDefaults"))
+            "ListPresets" -> SoapResult.ok(Upnp.RCS, name, linkedMapOf("CurrentPresetNameList" to "FactoryDefaults"))
             "SelectPreset" -> {
                 adoptVolume(40, false, echo = true)
-                SoapResult.ok(Upnp.RCS, action)
+                SoapResult.ok(Upnp.RCS, name)
             }
             else -> SoapResult.fault(401, "Invalid Action")
         }
     }
 
     fun handleCm(action: String, args: Map<String, String>): SoapResult {
-        return when (action) {
+        val name = SoapCodec.canonical(action)
+        return when (name) {
         "GetProtocolInfo" -> SoapResult.ok(
             Upnp.CMS,
-            action,
+            name,
             linkedMapOf("Source" to "", "Sink" to Upnp.SINK_PROTOCOLS),
         )
-        "GetCurrentConnectionIDs" -> SoapResult.ok(Upnp.CMS, action, linkedMapOf("ConnectionIDs" to "0"))
+        "GetCurrentConnectionIDs" -> SoapResult.ok(Upnp.CMS, name, linkedMapOf("ConnectionIDs" to "0"))
         "GetCurrentConnectionInfo" -> {
             val id = SoapCodec.arg(args, "ConnectionID") ?: "0"
             if (id != "0") return SoapResult.fault(706, "Invalid connection reference")
             SoapResult.ok(
                 Upnp.CMS,
-                action,
+                name,
                 linkedMapOf(
                     "RcsID" to "0",
                     "AVTransportID" to "0",
@@ -198,9 +201,14 @@ class DlnaRenderer(
     }
 
     private fun setUri(rawUri: String, rawMetadata: String, requestUserAgent: String?): SoapResult {
-        val trimmed = rawUri.trim()
+        val trimmed = SoapCodec.unescapeXml(rawUri).trim()
         if (trimmed.isEmpty()) return SoapResult.fault(402, "Invalid Args")
-        val parsed = CastMetadata.parse(rawMetadata)
+        val parsed = try {
+            CastMetadata.parse(rawMetadata)
+        } catch (error: Throwable) {
+            DmrLog.i("metadata ignored: ${error.javaClass.simpleName}")
+            ParsedMetadata()
+        }
         val resolvedTitle = CastMetadata.safeTitle(parsed.title, trimmed)
         val resolvedAgent = parsed.userAgent ?: userAgent()
         val source = SenderLabel.sourceLine(requestUserAgent ?: parsed.userAgent, rawMetadata, trimmed)
@@ -382,8 +390,8 @@ class DlnaRenderer(
     }
 
     private fun instanceOk(args: Map<String, String>): Boolean {
-        val id = SoapCodec.arg(args, "InstanceID") ?: return true
-        return id.isBlank() || id == "0"
+        val id = SoapCodec.arg(args, "InstanceID")?.trim() ?: return true
+        return id.isEmpty() || id == "0"
     }
 
     private fun transportState(engine: PlaybackSnapshot): String = when (desired) {

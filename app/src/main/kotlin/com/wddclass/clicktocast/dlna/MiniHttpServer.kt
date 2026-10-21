@@ -134,20 +134,22 @@ class MiniHttpServer(
         client.soTimeout = 8_000
         val remote = client.inetAddress?.hostAddress ?: ""
         val input = BufferedInputStream(client.getInputStream())
-        val request = readRequest(input, remote) ?: return
+        val output = client.getOutputStream()
+        val request = readRequest(input, remote) {
+            output.write(CONTINUE)
+            output.flush()
+        } ?: return
         val response = try {
             handler(request)
         } catch (error: Throwable) {
             DmrLog.i("http handler failed: ${error.javaClass.simpleName}: ${error.message}")
             HttpResponse(500, "Internal Server Error", emptyMap(), "error".toByteArray())
         }
-        client.getOutputStream().use { output ->
-            output.write(response.toBytes())
-            output.flush()
-        }
+        output.write(response.toBytes())
+        output.flush()
     }
 
-    private fun readRequest(input: InputStream, remoteIp: String): HttpRequest? {
+    private fun readRequest(input: InputStream, remoteIp: String, onContinue: () -> Unit): HttpRequest? {
         val requestLine = readLine(input) ?: return null
         val parts = requestLine.split(' ')
         if (parts.size < 2) return null
@@ -159,8 +161,11 @@ class MiniHttpServer(
             if (index <= 0) continue
             headers[line.substring(0, index).trim().lowercase()] = line.substring(index + 1).trim()
         }
+        if (headers["expect"]?.contains("100-continue", ignoreCase = true) == true) {
+            onContinue()
+        }
         val length = headers["content-length"]?.toIntOrNull()?.coerceAtLeast(0)
-        val chunked = headers["transfer-encoding"]?.contains("chunked", true) == true
+        val chunked = headers["transfer-encoding"]?.contains("chunked", ignoreCase = true) == true
         val body = when {
             chunked -> readChunked(input)
             length != null -> readBytes(input, length.coerceAtMost(MAX_BODY))
@@ -185,7 +190,13 @@ class MiniHttpServer(
         while (output.size() < MAX_BODY) {
             val line = readLine(input) ?: break
             val size = line.substringBefore(';').trim().toIntOrNull(16) ?: break
-            if (size == 0) break
+            if (size == 0) {
+                while (true) {
+                    val trailer = readLine(input) ?: break
+                    if (trailer.isEmpty()) break
+                }
+                break
+            }
             val chunk = readBytes(input, size)
             output.write(chunk)
             readLine(input)
@@ -227,5 +238,6 @@ class MiniHttpServer(
 
     companion object {
         private const val MAX_BODY = 1024 * 1024
+        private val CONTINUE = "HTTP/1.1 100 Continue\r\n\r\n".toByteArray(Charsets.ISO_8859_1)
     }
 }

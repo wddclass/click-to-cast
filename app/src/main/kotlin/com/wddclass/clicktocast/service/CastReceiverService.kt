@@ -126,7 +126,7 @@ class CastReceiverService : Service() {
         ssdp.start()
         refreshAddress()
         main.post(ticker)
-        DmrLog.i("receiver ready as ${settings.deviceName} on port $httpPort")
+        DmrLog.i("receiver ready as ${settings.deviceName} udn=uuid:${settings.deviceUuid} on port $httpPort")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -154,6 +154,7 @@ class CastReceiverService : Service() {
     )
 
     private fun refreshAddress() {
+        acquireMulticast()
         val next = NetworkAddresses.bestIpv4().orEmpty()
         if (next == hostAddress) return
         hostAddress = next
@@ -252,11 +253,17 @@ class CastReceiverService : Service() {
 
     private fun acquireMulticast() {
         try {
+            val existing = multicast
+            if (existing != null) {
+                if (!existing.isHeld) existing.acquire()
+                return
+            }
             val wifi = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
             multicast = wifi.createMulticastLock("clicktocast").apply {
                 setReferenceCounted(false)
                 acquire()
             }
+            DmrLog.i("multicast lock held")
         } catch (error: Exception) {
             DmrLog.i("multicast lock unavailable: ${error.message}")
         }

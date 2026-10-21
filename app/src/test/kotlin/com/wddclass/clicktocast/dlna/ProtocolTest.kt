@@ -19,6 +19,13 @@ class FriendlyNameTest {
         val xml = DescriptionXml.device(sample(Upnp.DEFAULT_FRIENDLY_NAME))
         assertTrue(xml.contains("<friendlyName>投屏点我</friendlyName>"))
         assertFalse(xml.contains("客厅"))
+        assertFalse(xml.contains("redsonic"))
+        assertFalse(xml.contains("hpplay"))
+        assertTrue(xml.contains("<UDN>uuid:11111111-2222-3333-4444-555555555555</UDN>"))
+        assertTrue(xml.contains("<presentationURL>http://192.168.1.8:8192/</presentationURL>"))
+        assertTrue(xml.contains("<mimetype>image/png</mimetype>"))
+        assertTrue(xml.contains("http://192.168.1.8:8192/dmr/icon48.png"))
+        assertTrue(xml.contains("http://192.168.1.8:8192/dmr/icon120.png"))
         assertTrue(xml.contains(DmrPaths.CONTROL_AVT))
         assertTrue(xml.contains(Upnp.AVT))
     }
@@ -216,8 +223,44 @@ class SsdpMessagesTest {
     }
 
     @Test
-    fun ssdpAllCoversRootAndServices() {
-        assertEquals(6, SsdpMessages.matching("ssdp:all", profile.uuid).size)
+    fun ssdpAllCoversRootServicesAndV2() {
+        val all = SsdpMessages.matching("ssdp:all", profile.uuid)
+        assertEquals(10, all.size)
+        assertEquals(10, SsdpMessages.matching("\"ssdp:all\"", profile.uuid).size)
+        assertTrue(all.any { it.first == Upnp.DEVICE })
+        assertTrue(all.any { it.first == Upnp.DEVICE_V2 })
+        assertTrue(all.any { it.first == Upnp.AVT })
+        assertTrue(all.any { it.first == Upnp.AVT_V2 })
         assertEquals(6, SsdpMessages.alive(profile, "Mon, 01 Jan 2024 00:00:00 GMT", 1, 1).size)
+        val v2 = SsdpMessages.searchResponses(profile, Upnp.DEVICE_V2, "Mon, 01 Jan 2024 00:00:00 GMT", 1, 1)
+        assertEquals(1, v2.size)
+        assertTrue(v2[0].contains("ST: ${Upnp.DEVICE_V2}"))
+        assertTrue(v2[0].contains("USN: uuid:${profile.uuid}::${Upnp.DEVICE_V2}"))
+        assertTrue(v2[0].contains("ClickToCast"))
+        assertFalse(v2[0].contains("redsonic"))
+        assertFalse(v2[0].contains("hpplay"))
+        assertTrue(SsdpMessages.matching("urn:schemas-upnp-org:device:MediaServer:1", profile.uuid).isEmpty())
+        assertEquals(0, SsdpTiming.delayMs(0, 99))
+        assertEquals(400, SsdpTiming.delayMs(1, 400))
+        assertEquals(1000, SsdpTiming.delayMs(1, 9_000))
+        assertEquals(3, SsdpTiming.ALIVE_BURST)
+        assertEquals(30_000L, SsdpTiming.ALIVE_INTERVAL_MS)
+        assertEquals(2, SsdpTiming.MULTICAST_TTL)
+    }
+}
+
+class NetworkAddressTest {
+    @Test
+    fun phoneSubnetWinsOverTheFallback() {
+        assertEquals(
+            "192.168.8.20",
+            com.wddclass.clicktocast.net.NetworkAddresses.preferredHost(
+                "192.168.8.55",
+                listOf("10.0.0.8", "192.168.8.20"),
+                "10.0.0.8",
+            ),
+        )
+        assertTrue(com.wddclass.clicktocast.net.NetworkAddresses.same24("192.168.1.8", "192.168.1.22"))
+        assertFalse(com.wddclass.clicktocast.net.NetworkAddresses.same24("192.168.1.8", "192.168.2.22"))
     }
 }

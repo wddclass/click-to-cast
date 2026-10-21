@@ -8,6 +8,8 @@ object DescriptionXml {
         val uuid = XmlText.escape(profile.uuid)
         val version = XmlText.escape(profile.version)
         val base = XmlText.escape(profile.urlBase)
+        val icon48 = XmlText.escape(profile.urlBase + "dmr/icon48.png")
+        val icon120 = XmlText.escape(profile.urlBase + "dmr/icon120.png")
         return """<?xml version="1.0" encoding="utf-8"?>
 <root xmlns="urn:schemas-upnp-org:device-1-0" xmlns:dlna="urn:schemas-dlna-org:device-1-0">
   <specVersion><major>1</major><minor>0</minor></specVersion>
@@ -24,6 +26,22 @@ object DescriptionXml {
     <serialNumber>$uuid</serialNumber>
     <UDN>uuid:$uuid</UDN>
     <dlna:X_DLNADOC>DMR-1.50</dlna:X_DLNADOC>
+    <iconList>
+      <icon>
+        <mimetype>image/png</mimetype>
+        <width>48</width>
+        <height>48</height>
+        <depth>24</depth>
+        <url>$icon48</url>
+      </icon>
+      <icon>
+        <mimetype>image/png</mimetype>
+        <width>120</width>
+        <height>120</height>
+        <depth>24</depth>
+        <url>$icon120</url>
+      </icon>
+    </iconList>
     <serviceList>
       <service>
         <serviceType>${Upnp.AVT}</serviceType>
@@ -47,6 +65,7 @@ object DescriptionXml {
         <eventSubURL>${DmrPaths.EVENT_CMS}</eventSubURL>
       </service>
     </serviceList>
+    <presentationURL>$base</presentationURL>
   </device>
 </root>
 """

@@ -61,6 +61,7 @@ export ANDROID_HOME=...
 - 进度主要靠控制点轮询 `GetPositionInfo`。GENA 通知的是状态变化，不是每一帧进度。
 - 外挂字幕、播放列表和下一首只做了最基本的保存，不会自动连播。
 - 雷鸟 Android 11 上，第一笔 HTTP 请求会调用仅 API 33 才有的 `ByteArrayOutputStream.toString(Charset)`，进程因此退出。请求行已改为 `String(bytes, charset)`，HTTP 工作线程按连接捕获 `Throwable`。
+- 空的 `CurrentURIMetaData`、`NOT_IMPLEMENTED`、未转义的 DIDL，以及 `Expect: 100-continue` / chunked 请求都按可选元数据处理。发现应答覆盖 `ssdp:all`，并在每块 IPv4 网卡上以 TTL 2 发送 3 次 NOTIFY。设备描述带 `presentationURL` 和 PNG 图标。出厂名仍是「投屏点我」，和电视自带的 redsonic / hpplay 分开。
 - 发现、起播、暂停、seek、4K/HDR 和长时间播放仍未在雷鸟鹏 6 SE 上验收。
 
 ## 协议说明

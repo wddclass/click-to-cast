@@ -7,8 +7,39 @@ import java.util.TimeZone
 
 data class MSearch(val st: String, val mxSeconds: Int)
 
+object SsdpTiming {
+    const val ALIVE_BURST = 3
+    const val ALIVE_INTERVAL_MS = 30_000L
+    const val MULTICAST_TTL = 2
+
+    /** Random wait inside 0..MX seconds. MX is clamped to the UPnP maximum of 5. */
+    fun delayMs(mxSeconds: Int, roll: Int): Int {
+        val window = mxSeconds.coerceIn(0, 5) * 1000
+        if (window == 0) return 0
+        return roll.coerceIn(0, window)
+    }
+}
+
 object SsdpMessages {
-    fun targets(uuid: String): List<Pair<String, String>> {
+    fun notifyTargets(uuid: String): List<Pair<String, String>> = primaryTargets(uuid)
+
+    fun searchTargets(uuid: String): List<Pair<String, String>> {
+        val udn = "uuid:$uuid"
+        return primaryTargets(uuid) + listOf(Upnp.DEVICE_V2, Upnp.AVT_V2, Upnp.RCS_V2, Upnp.CMS_V2).map { nt ->
+            nt to "$udn::$nt"
+        }
+    }
+
+    fun matching(st: String, uuid: String): List<Pair<String, String>> {
+        val needle = st.trim().trim('"').trim('\'')
+        val all = searchTargets(uuid)
+        if (needle.equals("ssdp:all", ignoreCase = true)) return all
+        return all.filter { (nt, usn) ->
+            nt.equals(needle, ignoreCase = true) || usn.equals(needle, ignoreCase = true)
+        }
+    }
+
+    private fun primaryTargets(uuid: String): List<Pair<String, String>> {
         val udn = "uuid:$uuid"
         return listOf(
             "upnp:rootdevice" to "$udn::upnp:rootdevice",
@@ -18,15 +49,6 @@ object SsdpMessages {
             Upnp.RCS to "$udn::${Upnp.RCS}",
             Upnp.CMS to "$udn::${Upnp.CMS}",
         )
-    }
-
-    fun matching(st: String, uuid: String): List<Pair<String, String>> {
-        val all = targets(uuid)
-        val needle = st.trim()
-        if (needle.equals("ssdp:all", ignoreCase = true)) return all
-        return all.filter { (nt, usn) ->
-            nt.equals(needle, ignoreCase = true) || usn.equals(needle, ignoreCase = true)
-        }
     }
 
     fun parseMSearch(packet: String): MSearch? {
@@ -40,8 +62,9 @@ object SsdpMessages {
             if (index <= 0) continue
             headers[line.substring(0, index).trim().lowercase()] = line.substring(index + 1).trim()
         }
-        val st = headers["st"] ?: return null
-        val mx = headers["mx"]?.toIntOrNull()?.coerceIn(0, 5) ?: 1
+        val st = headers["st"]?.trim()?.trim('"')?.trim('\'')?.trim() ?: return null
+        if (st.isEmpty()) return null
+        val mx = headers["mx"]?.substringBefore('.')?.trim()?.toIntOrNull()?.coerceIn(0, 5) ?: 1
         return MSearch(st, mx)
     }
 
@@ -53,10 +76,10 @@ object SsdpMessages {
     }
 
     fun alive(profile: DeviceProfile, date: String, bootId: Int, configId: Int): List<String> =
-        targets(profile.uuid).map { (nt, usn) -> notify("ssdp:alive", nt, usn, profile, date, bootId, configId) }
+        notifyTargets(profile.uuid).map { (nt, usn) -> notify("ssdp:alive", nt, usn, profile, date, bootId, configId) }
 
     fun bye(profile: DeviceProfile, date: String, bootId: Int, configId: Int): List<String> =
-        targets(profile.uuid).map { (nt, usn) -> notify("ssdp:byebye", nt, usn, profile, date, bootId, configId) }
+        notifyTargets(profile.uuid).map { (nt, usn) -> notify("ssdp:byebye", nt, usn, profile, date, bootId, configId) }
 
     fun httpDate(epochMs: Long): String {
         val format = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US)

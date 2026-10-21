@@ -13,6 +13,8 @@ class RendererHttpHandler(
             request.method == "GET" && path == DmrPaths.SCPD_AVT -> xml(ScpdXml.avTransport())
             request.method == "GET" && path == DmrPaths.SCPD_RCS -> xml(ScpdXml.rendering())
             request.method == "GET" && path == DmrPaths.SCPD_CMS -> xml(ScpdXml.connection())
+            request.method == "GET" && path == DmrPaths.ICON_48 -> png(DeviceIcons.small)
+            request.method == "GET" && path == DmrPaths.ICON_120 -> png(DeviceIcons.large)
             request.method == "POST" && path == DmrPaths.CONTROL_AVT ->
                 soap(request) { action, args -> renderer.handleAv(action, args, request.header("user-agent")) }
             request.method == "POST" && path == DmrPaths.CONTROL_RCS ->
@@ -31,11 +33,50 @@ class RendererHttpHandler(
         request: HttpRequest,
         dispatch: (action: String, args: Map<String, String>) -> SoapResult,
     ): HttpResponse {
-        val body = String(request.body, Charsets.UTF_8)
-        if (body.isBlank()) return soapResponse(SoapResult.fault(402, "Invalid Args"))
+        val body = SoapCodec.decodeBody(request.body)
+        if (body.isBlank()) {
+            val result = SoapResult.fault(402, "Invalid Args")
+            DmrLog.i("soap ${request.path} empty body from ${request.remoteIp} bytes=${request.body.size} -> HTTP 500 UPnP 402")
+            return soapResponse(result)
+        }
         val action = SoapCodec.actionName(request.header("soapaction"), body)
-        if (action.isBlank()) return soapResponse(SoapResult.fault(401, "Invalid Action"))
-        return soapResponse(dispatch(action, SoapCodec.arguments(body)))
+        if (action.isBlank()) {
+            val result = SoapResult.fault(401, "Invalid Action")
+            DmrLog.i(
+                "soap ${request.path} unrecognized from ${request.remoteIp} " +
+                    "header=${request.header("soapaction")} body=${body.take(160)} -> HTTP 500 UPnP 401",
+            )
+            return soapResponse(result)
+        }
+        val args = SoapCodec.arguments(body)
+        val result = dispatch(action, args)
+        logSoap(request, action, args, result)
+        return soapResponse(result)
+    }
+
+    private fun logSoap(request: HttpRequest, action: String, args: Map<String, String>, result: SoapResult) {
+        val shown = if (args.isEmpty()) {
+            "(none)"
+        } else {
+            args.entries.joinToString(prefix = "{", postfix = "}") { (key, value) ->
+                "$key=${previewArg(key, value)}"
+            }
+        }
+        val code = ERROR_CODE.find(result.body)?.groupValues?.get(1)
+        val why = ERROR_DESC.find(result.body)?.groupValues?.get(1)
+        val outcome = buildString {
+            append("HTTP ")
+            append(result.httpStatus)
+            if (code != null) append(" UPnP ").append(code)
+            if (!why.isNullOrBlank()) append(' ').append(why)
+        }
+        DmrLog.i("soap ${request.path} $action from ${request.remoteIp} args=$shown -> $outcome")
+    }
+
+    private fun previewArg(key: String, value: String): String {
+        if (value.isEmpty()) return "(empty)"
+        val shown = if (key.contains("uri", ignoreCase = true)) redactUrl(value) else value
+        return if (shown.length <= 180) shown else shown.take(180) + "…(${value.length})"
     }
 
     private fun subscribe(path: String, request: HttpRequest): HttpResponse {
@@ -90,10 +131,28 @@ class RendererHttpHandler(
         body.toByteArray(Charsets.UTF_8),
     )
 
+    private fun png(bytes: ByteArray): HttpResponse {
+        if (bytes.isEmpty()) return text(404, "Not Found", "")
+        return HttpResponse(
+            200,
+            "OK",
+            linkedMapOf(
+                "Content-Type" to "image/png",
+                "Cache-Control" to "max-age=86400",
+            ),
+            bytes,
+        )
+    }
+
     private fun text(status: Int, reason: String, body: String): HttpResponse = HttpResponse(
         status,
         reason,
         linkedMapOf("Content-Type" to "text/plain; charset=utf-8"),
         body.toByteArray(Charsets.UTF_8),
     )
+
+    companion object {
+        private val ERROR_CODE = Regex("<errorCode>(\\d+)</errorCode>")
+        private val ERROR_DESC = Regex("<errorDescription>([^<]*)</errorDescription>")
+    }
 }
