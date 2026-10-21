@@ -8,8 +8,12 @@ class RendererHttpHandler(
     fun handle(request: HttpRequest): HttpResponse {
         val path = request.path.trimEnd('/').ifBlank { "/" }
         return when {
-            request.method == "GET" && path == DmrPaths.DESCRIPTION ->
+            request.method == "GET" && path == DmrPaths.DESCRIPTION -> {
+                DmrLog.i(
+                    "http description from ${request.remoteIp} ua=${request.header("user-agent") ?: "-"}",
+                )
                 xml(DescriptionXml.device(profile()))
+            }
             request.method == "GET" && path == DmrPaths.SCPD_AVT -> xml(ScpdXml.avTransport())
             request.method == "GET" && path == DmrPaths.SCPD_RCS -> xml(ScpdXml.rendering())
             request.method == "GET" && path == DmrPaths.SCPD_CMS -> xml(ScpdXml.connection())

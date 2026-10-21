@@ -5,18 +5,34 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
-data class MSearch(val st: String, val mxSeconds: Int)
+data class MSearch(
+    val st: String,
+    val mxSeconds: Int,
+    val userAgent: String = "",
+    val host: String = "",
+    val man: String = "",
+)
 
 object SsdpTiming {
     const val ALIVE_BURST = 3
     const val ALIVE_INTERVAL_MS = 30_000L
     const val MULTICAST_TTL = 2
+    const val IPV4_GROUP = "239.255.255.250"
+    const val IPV6_LINK_GROUP = "ff02::c"
+    const val IPV6_SITE_GROUP = "ff05::c"
 
-    /** Random wait inside 0..MX seconds. MX is clamped to the UPnP maximum of 5. */
+    /**
+     * Random wait inside the MX window, but never past 800ms.
+     * iOS cast lists often stop listening at about 1s even when MX is larger.
+     * MX 0 is answered immediately. Any other MX waits at least 50ms so the
+     * phone's receive socket is armed before the datagram arrives.
+     */
     fun delayMs(mxSeconds: Int, roll: Int): Int {
-        val window = mxSeconds.coerceIn(0, 5) * 1000
-        if (window == 0) return 0
-        return roll.coerceIn(0, window)
+        val mxWindow = mxSeconds.coerceIn(0, 5) * 1000
+        if (mxWindow == 0) return 0
+        val cap = minOf(mxWindow, 800)
+        val floor = minOf(50, cap)
+        return roll.coerceIn(floor, cap)
     }
 }
 
@@ -65,7 +81,10 @@ object SsdpMessages {
         val st = headers["st"]?.trim()?.trim('"')?.trim('\'')?.trim() ?: return null
         if (st.isEmpty()) return null
         val mx = headers["mx"]?.substringBefore('.')?.trim()?.toIntOrNull()?.coerceIn(0, 5) ?: 1
-        return MSearch(st, mx)
+        val userAgent = headers["user-agent"].orEmpty()
+        val host = headers["host"].orEmpty()
+        val man = headers["man"].orEmpty()
+        return MSearch(st, mx, userAgent, host, man)
     }
 
     fun searchResponses(profile: DeviceProfile, st: String, date: String, bootId: Int, configId: Int): List<String> {
@@ -75,11 +94,27 @@ object SsdpMessages {
         }
     }
 
-    fun alive(profile: DeviceProfile, date: String, bootId: Int, configId: Int): List<String> =
-        notifyTargets(profile.uuid).map { (nt, usn) -> notify("ssdp:alive", nt, usn, profile, date, bootId, configId) }
+    fun alive(
+        profile: DeviceProfile,
+        date: String,
+        bootId: Int,
+        configId: Int,
+        multicastHost: String = "${SsdpTiming.IPV4_GROUP}:1900",
+    ): List<String> =
+        notifyTargets(profile.uuid).map { (nt, usn) ->
+            notify("ssdp:alive", nt, usn, profile, date, bootId, configId, multicastHost)
+        }
 
-    fun bye(profile: DeviceProfile, date: String, bootId: Int, configId: Int): List<String> =
-        notifyTargets(profile.uuid).map { (nt, usn) -> notify("ssdp:byebye", nt, usn, profile, date, bootId, configId) }
+    fun bye(
+        profile: DeviceProfile,
+        date: String,
+        bootId: Int,
+        configId: Int,
+        multicastHost: String = "${SsdpTiming.IPV4_GROUP}:1900",
+    ): List<String> =
+        notifyTargets(profile.uuid).map { (nt, usn) ->
+            notify("ssdp:byebye", nt, usn, profile, date, bootId, configId, multicastHost)
+        }
 
     fun httpDate(epochMs: Long): String {
         val format = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US)
@@ -92,20 +127,30 @@ object SsdpMessages {
             "HTTP/1.1 200 OK",
             "CACHE-CONTROL: max-age=1800",
             "DATE: $date",
-            "EXT:",
+            "EXT: ",
             "LOCATION: ${profile.location}",
             "SERVER: ${profile.serverHeader}",
             "ST: $st",
             "USN: $usn",
             "BOOTID.UPNP.ORG: $bootId",
             "CONFIGID.UPNP.ORG: $configId",
-            "CONTENT-LENGTH: 0",
+            "SEARCHPORT.UPNP.ORG: 1900",
+            "Content-Length: 0",
         )
 
-    private fun notify(nts: String, nt: String, usn: String, profile: DeviceProfile, date: String, bootId: Int, configId: Int): String =
+    private fun notify(
+        nts: String,
+        nt: String,
+        usn: String,
+        profile: DeviceProfile,
+        date: String,
+        bootId: Int,
+        configId: Int,
+        multicastHost: String,
+    ): String =
         lines(
             "NOTIFY * HTTP/1.1",
-            "HOST: 239.255.255.250:1900",
+            "HOST: $multicastHost",
             "CACHE-CONTROL: max-age=1800",
             "LOCATION: ${profile.location}",
             "NT: $nt",
@@ -114,6 +159,7 @@ object SsdpMessages {
             "USN: $usn",
             "BOOTID.UPNP.ORG: $bootId",
             "CONFIGID.UPNP.ORG: $configId",
+            "SEARCHPORT.UPNP.ORG: 1900",
             "DATE: $date",
         )
 

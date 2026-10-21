@@ -44,7 +44,11 @@ data class DeviceProfile(
 ) {
     val udn: String get() = "uuid:$uuid"
     val location: String get() = "http://$hostAddress:$httpPort${DmrPaths.DESCRIPTION}"
-    val serverHeader: String get() = "Android/11 UPnP/1.0 ${Upnp.PRODUCT}/$version"
+    /**
+     * Comma form matches Platinum and the TCL redsonic stack.
+     * Several iOS parsers split SERVER on commas and drop the device when that yields one token.
+     */
+    val serverHeader: String get() = "Android/11, UPnP/1.0, ${Upnp.PRODUCT}/$version"
     val urlBase: String get() = "http://$hostAddress:$httpPort/"
 }
 

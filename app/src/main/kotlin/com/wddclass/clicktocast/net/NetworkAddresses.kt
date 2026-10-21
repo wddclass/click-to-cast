@@ -1,9 +1,12 @@
 package com.wddclass.clicktocast.net
 
 import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.NetworkInterface
 
 data class LanNic(val name: String, val ipv4: String, val nif: NetworkInterface)
+
+data class V6Nic(val name: String, val index: Int, val nif: NetworkInterface)
 
 object NetworkAddresses {
     fun bestIpv4(): String? = ipv4Nics().firstOrNull()?.ipv4
@@ -21,6 +24,26 @@ object NetworkAddresses {
                     found += LanNic(name, host, nif)
                 }
             }
+        }
+        return found.sortedBy { rank(it.name) }
+    }
+
+    /** Up interfaces that have an IPv6 address, including link-local, so ff02::c can be joined. */
+    fun ipv6Nics(): List<V6Nic> {
+        val interfaces = NetworkInterface.getNetworkInterfaces() ?: return emptyList()
+        val found = mutableListOf<V6Nic>()
+        for (nif in interfaces) {
+            if (!nif.isUp || nif.isLoopback) continue
+            val name = nif.name ?: continue
+            if (skip(name)) continue
+            val has6 = nif.inetAddresses.asSequence().any { it is Inet6Address && !it.isMulticastAddress }
+            if (!has6) continue
+            val index = try {
+                nif.index
+            } catch (_: Exception) {
+                0
+            }
+            found += V6Nic(name, index, nif)
         }
         return found.sortedBy { rank(it.name) }
     }

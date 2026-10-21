@@ -57,11 +57,12 @@ export ANDROID_HOME=...
 - 爱奇艺、优酷、腾讯视频、Bilibili 的部分版本只走私有协议，或者地址带短时签名和 DRM。它们走标准 DLNA 时可以被发现；走私有协议时列表里不会出现本应用，或者给出地址后无法播放。
 - 不转码。编码、封装或 DRM 电视硬解不了，就会直接失败。
 - 控制面没有配对。请只在自己的家庭网络里使用，不要把 8192 端口映射到公网。
-- 只保证 IPv4。访客网络、AP 隔离和部分 Mesh 会让 SSDP 组播过不去。
+- 发现同时听 IPv4 `239.255.255.250:1900` 和 IPv6 `ff02::c` / `ff05::c`。访客网络、AP 隔离和部分 Mesh 仍会让组播过不去。iOS 收不到组播 NOTIFY 时，要靠我们从 1900 端口单播回它的源端口。
 - 进度主要靠控制点轮询 `GetPositionInfo`。GENA 通知的是状态变化，不是每一帧进度。
 - 外挂字幕、播放列表和下一首只做了最基本的保存，不会自动连播。
 - 雷鸟 Android 11 上，第一笔 HTTP 请求会调用仅 API 33 才有的 `ByteArrayOutputStream.toString(Charset)`，进程因此退出。请求行已改为 `String(bytes, charset)`，HTTP 工作线程按连接捕获 `Throwable`。
-- 空的 `CurrentURIMetaData`、`NOT_IMPLEMENTED`、未转义的 DIDL，以及 `Expect: 100-continue` / chunked 请求都按可选元数据处理。发现应答覆盖 `ssdp:all`，并在每块 IPv4 网卡上以 TTL 2 发送 3 次 NOTIFY。设备描述带 `presentationURL` 和 PNG 图标。出厂名仍是「投屏点我」，和电视自带的 redsonic / hpplay 分开。
+- 空的 `CurrentURIMetaData`、`NOT_IMPLEMENTED`、未转义的 DIDL，以及 `Expect: 100-continue` / chunked 请求都按可选元数据处理。发现应答覆盖 `ssdp:all`，并在每块 IPv4 网卡上以 TTL 2 发送 3 次 NOTIFY。IPv6 链路组播同样宣告。M-SEARCH 的单播回复从绑定 1900 的套接字发回发送方的 ip:port，随机延迟不超过 800ms。设备描述带 `presentationURL`、PNG 图标、`dlna:X_DLNADOC`（DMR-1.50）和 `dlna:X_DLNACAP`。`SERVER` 使用逗号分隔，和 Platinum / redsonic 一样。出厂名仍是「投屏点我」，和电视自带的 redsonic / hpplay 分开。
+- 每次 M-SEARCH（来源 ip:port、ST）和每条回复都会打在 logcat 标签 `ClickToCast` 下。
 - 发现、起播、暂停、seek、4K/HDR 和长时间播放仍未在雷鸟鹏 6 SE 上验收。
 
 ## 协议说明

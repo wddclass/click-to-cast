@@ -5,6 +5,12 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.Inet6Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.MulticastSocket
 
 class FriendlyNameTest {
     @Test
@@ -26,6 +32,8 @@ class FriendlyNameTest {
         assertTrue(xml.contains("<mimetype>image/png</mimetype>"))
         assertTrue(xml.contains("http://192.168.1.8:8192/dmr/icon48.png"))
         assertTrue(xml.contains("http://192.168.1.8:8192/dmr/icon120.png"))
+        assertTrue(xml.contains("""<dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">DMR-1.50</dlna:X_DLNADOC>"""))
+        assertTrue(xml.contains("""<dlna:X_DLNACAP xmlns:dlna="urn:schemas-dlna-org:device-1-0">av-transport-url</dlna:X_DLNACAP>"""))
         assertTrue(xml.contains(DmrPaths.CONTROL_AVT))
         assertTrue(xml.contains(Upnp.AVT))
     }
@@ -211,6 +219,7 @@ class SsdpMessagesTest {
             MAN: "ssdp:discover"
             MX: 1
             ST: urn:schemas-upnp-org:device:MediaRenderer:1
+            USER-AGENT: Bilibili/1.0
 
         """.trimIndent().replace("\n", "\r\n")
         val search = SsdpMessages.parseMSearch(packet)
@@ -220,6 +229,15 @@ class SsdpMessagesTest {
         assertTrue(responses[0].contains("LOCATION: http://192.168.1.20:8192/dmr/description.xml"))
         assertTrue(responses[0].contains("ST: ${Upnp.DEVICE}"))
         assertTrue(responses[0].contains("USN: uuid:${profile.uuid}::${Upnp.DEVICE}"))
+        assertEquals("Bilibili/1.0", search!!.userAgent)
+        val lines = responses[0].split("\r\n")
+        assertEquals("HTTP/1.1 200 OK", lines[0])
+        assertEquals("EXT: ", lines[3])
+        assertEquals("SERVER: Android/11, UPnP/1.0, ClickToCast/0.1.0", lines[5])
+        assertEquals("SEARCHPORT.UPNP.ORG: 1900", lines[10])
+        assertEquals("Content-Length: 0", lines[11])
+        assertEquals("", lines[12])
+        assertTrue(responses[0].endsWith("\r\n\r\n"))
     }
 
     @Test
@@ -241,8 +259,10 @@ class SsdpMessagesTest {
         assertFalse(v2[0].contains("hpplay"))
         assertTrue(SsdpMessages.matching("urn:schemas-upnp-org:device:MediaServer:1", profile.uuid).isEmpty())
         assertEquals(0, SsdpTiming.delayMs(0, 99))
+        assertEquals(50, SsdpTiming.delayMs(1, 0))
         assertEquals(400, SsdpTiming.delayMs(1, 400))
-        assertEquals(1000, SsdpTiming.delayMs(1, 9_000))
+        assertEquals(800, SsdpTiming.delayMs(1, 9_000))
+        assertEquals(800, SsdpTiming.delayMs(5, 5_000))
         assertEquals(3, SsdpTiming.ALIVE_BURST)
         assertEquals(30_000L, SsdpTiming.ALIVE_INTERVAL_MS)
         assertEquals(2, SsdpTiming.MULTICAST_TTL)
@@ -262,5 +282,54 @@ class NetworkAddressTest {
         )
         assertTrue(com.wddclass.clicktocast.net.NetworkAddresses.same24("192.168.1.8", "192.168.1.22"))
         assertFalse(com.wddclass.clicktocast.net.NetworkAddresses.same24("192.168.1.8", "192.168.2.22"))
+        assertEquals(
+            "192.168.1.8",
+            com.wddclass.clicktocast.net.NetworkAddresses.preferredHost("fe80::1", listOf("192.168.1.8"), "192.168.1.8"),
+        )
+    }
+}
+
+class SsdpReplyTest {
+    @Test
+    fun mappedIpv6AndLinkLocalScope() {
+        val bytes = ByteArray(16)
+        bytes[10] = 0xff.toByte()
+        bytes[11] = 0xff.toByte()
+        bytes[12] = 192.toByte()
+        bytes[13] = 168.toByte()
+        bytes[14] = 123
+        bytes[15] = 20
+        val mapped = Inet6Address.getByAddress(null, bytes, 0)
+        assertEquals("192.168.123.20", SsdpReply.ipv4Literal(mapped))
+        val link = InetAddress.getByName("fe80::1")
+        assertNull(SsdpReply.ipv4Literal(link))
+        val target = SsdpReply.unicastTarget(link, 54321, 4)
+        assertEquals(4, (target.address as Inet6Address).scopeId)
+        assertEquals(54321, target.port)
+    }
+
+    @Test
+    fun unicastReplyUsesTheSocketBoundTo1900() {
+        val phone = DatagramSocket(null)
+        phone.reuseAddress = true
+        phone.bind(InetSocketAddress("127.0.0.1", 0))
+        phone.soTimeout = 2000
+        val ssdp = MulticastSocket(null)
+        try {
+            ssdp.reuseAddress = true
+            ssdp.bind(InetSocketAddress("127.0.0.1", SsdpReply.PORT))
+            val body = "HTTP/1.1 200 OK\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n"
+                .toByteArray(Charsets.US_ASCII)
+            ssdp.send(DatagramPacket(body, body.size, InetSocketAddress("127.0.0.1", phone.localPort)))
+            val buffer = ByteArray(256)
+            val got = DatagramPacket(buffer, buffer.size)
+            phone.receive(got)
+            assertEquals(SsdpReply.PORT, got.port)
+            assertEquals(SsdpReply.PORT, ssdp.localPort)
+            assertTrue(String(got.data, got.offset, got.length, Charsets.US_ASCII).startsWith("HTTP/1.1 200 OK"))
+        } finally {
+            ssdp.close()
+            phone.close()
+        }
     }
 }

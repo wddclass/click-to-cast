@@ -18,14 +18,15 @@ object DescriptionXml {
     <deviceType>${Upnp.DEVICE}</deviceType>
     <friendlyName>$name</friendlyName>
     <manufacturer>wddclass</manufacturer>
-    <manufacturerURL>https://github.com/wddclass/click-to-cast</manufacturerURL>
+    <manufacturerURL>http://github.com/wddclass/click-to-cast</manufacturerURL>
     <modelDescription>DLNA media renderer</modelDescription>
     <modelName>投屏点我</modelName>
     <modelNumber>$version</modelNumber>
-    <modelURL>https://github.com/wddclass/click-to-cast</modelURL>
+    <modelURL>http://github.com/wddclass/click-to-cast</modelURL>
     <serialNumber>$uuid</serialNumber>
     <UDN>uuid:$uuid</UDN>
-    <dlna:X_DLNADOC>DMR-1.50</dlna:X_DLNADOC>
+    <dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">DMR-1.50</dlna:X_DLNADOC>
+    <dlna:X_DLNACAP xmlns:dlna="urn:schemas-dlna-org:device-1-0">av-transport-url</dlna:X_DLNACAP>
     <iconList>
       <icon>
         <mimetype>image/png</mimetype>
