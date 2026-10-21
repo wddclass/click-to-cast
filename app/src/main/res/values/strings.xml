@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">投屏点我</string>
+    <string name="brand">投屏点我</string>
+    <string name="status_waiting">等待投屏</string>
+    <string name="ip_missing">未连接到局域网</string>
+    <string name="step_1">手机连接同一 Wi‑Fi</string>
+    <string name="step_2">视频里点「投屏」</string>
+    <string name="step_3">选择「投屏点我」</string>
+    <string name="step_pick">选择「%1$s」</string>
+    <string name="nav_settings">设置</string>
+    <string name="nav_history">投屏记录</string>
+    <string name="nav_about">关于</string>
+    <string name="settings_title">设置</string>
+    <string name="device_name_label">设备名称</string>
+    <string name="device_name_hint">手机列表中的名称，默认为投屏点我</string>
+    <string name="restore_name">恢复为投屏点我</string>
+    <string name="auto_start">开机自启</string>
+    <string name="auto_start_on">开机自启：开</string>
+    <string name="auto_start_off">开机自启：关</string>
+    <string name="ua_label">访问视频时使用的标识</string>
+    <string name="ua_browser">浏览器标识</string>
+    <string name="ua_player">播放器标识</string>
+    <string name="save">保存</string>
+    <string name="stop_service">停止接收</string>
+    <string name="saved">已保存</string>
+    <string name="history_title">投屏记录</string>
+    <string name="history_empty">还没有投屏记录</string>
+    <string name="history_clear">清空记录</string>
+    <string name="about_title">关于</string>
+    <string name="about_body">投屏点我是电视上的 DLNA 接收端。手机里的视频 App 把播放地址发给电视，电视用自己的播放器打开。没有账号，没有广告，也不会把观看记录发到外面。</string>
+    <string name="about_limits">目前只接收标准 DLNA / UPnP。AirPlay、Miracast、乐播私有协议还不支持。带 DRM 的片源、以及只走私有投屏的 App，可能搜不到这台电视，或给出地址后无法播放。</string>
+    <string name="about_version">版本 %1$s</string>
+    <string name="back">返回</string>
+    <string name="play_pause">播放或暂停</string>
+    <string name="remote_hints">◀▶  快退 / 快进 10 秒      OK 暂停      返回 退出投屏</string>
+    <string name="volume_label">音量 %1$d</string>
+    <string name="opening">正在打开视频</string>
+    <string name="channel_name">投屏接收</string>
+    <string name="channel_desc">保持电视可被手机发现</string>
+    <string name="notif_waiting">正在等待投屏</string>
+    <string name="notif_playing">正在播放：%1$s</string>
+</resources>

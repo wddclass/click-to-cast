@@ -1,0 +1,70 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Unit tests and release APK
+        run: ./gradlew test assembleRelease --stacktrace
+
+      - name: Require armeabi-v7a if the APK ships native code
+        run: |
+          python3 - << 'PY'
+          import pathlib, sys, zipfile
+          apks = list(pathlib.Path("app/build/outputs/apk/release").glob("*.apk"))
+          if not apks:
+              sys.exit("release apk missing")
+          sos = [name for name in zipfile.ZipFile(apks[0]).namelist() if name.endswith(".so")]
+          print("native libs:", sos or "(none — universal dex)")
+          abis = {name.split("/")[1] for name in sos if name.startswith("lib/")}
+          if abis and "armeabi-v7a" not in abis:
+              sys.exit(f"APK native libs omit armeabi-v7a: {sorted(abis)}")
+          PY
+
+      - name: Checksums
+        run: |
+          cd app/build/outputs/apk/release
+          sha256sum *.apk | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clicktocast-release
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/SHA256SUMS
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/SHA256SUMS
+          generate_release_notes: true

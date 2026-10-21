@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0A0E17</color>
+    <color name="text">#F7F8FA</color>
+    <color name="muted">#8E99A8</color>
+    <color name="source">#C5CED8</color>
+    <color name="teal">#24FEC1</color>
+    <color name="blue">#2E7BF6</color>
+    <color name="danger">#FF5C6A</color>
+    <color name="pill">#1C2230</color>
+    <color name="ink">#0A0E17</color>
+    <color name="track">#33FFFFFF</color>
+    <color name="field">#141A26</color>
+</resources>

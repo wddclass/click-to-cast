@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="48dp"
+        android:layout_marginTop="32dp"
+        android:text="@string/history_title"
+        android:textColor="@color/muted"
+        android:textSize="16sp" />
+
+    <TextView
+        android:id="@+id/empty"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:text="@string/history_empty"
+        android:textColor="@color/muted"
+        android:textSize="22sp" />
+
+    <ListView
+        android:id="@+id/list"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginStart="48dp"
+        android:layout_marginTop="84dp"
+        android:layout_marginEnd="48dp"
+        android:layout_marginBottom="96dp"
+        android:clipToPadding="false"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="10dp"
+        android:listSelector="@android:color/transparent"
+        android:scrollbars="none" />
+
+    <TextView
+        android:id="@+id/clear"
+        style="@style/Pill"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="36dp"
+        android:text="@string/history_clear" />
+</FrameLayout>
