@@ -16,6 +16,7 @@ class HttpRequest(
     val headers: Map<String, String>,
     val body: ByteArray,
     val remoteIp: String,
+    val query: String = "",
 ) {
     fun header(name: String): String? = headers[name.lowercase()]
 }
@@ -171,18 +172,20 @@ class MiniHttpServer(
             length != null -> readBytes(input, length.coerceAtMost(MAX_BODY))
             else -> ByteArray(0)
         }
-        return HttpRequest(parts[0].uppercase(), normalizePath(parts[1]), headers, body, remoteIp)
+        val (path, query) = splitTarget(parts[1])
+        return HttpRequest(parts[0].uppercase(), path, headers, body, remoteIp, query)
     }
 
-    private fun normalizePath(target: String): String {
+    private fun splitTarget(target: String): Pair<String, String> {
         val raw = target.trim()
-        val path = if (raw.startsWith("http://") || raw.startsWith("https://")) {
+        val pathAndQuery = if (raw.startsWith("http://") || raw.startsWith("https://")) {
             "/" + raw.substringAfter("://").substringAfter('/', "")
         } else {
             raw
         }
-        val clean = path.substringBefore('?')
-        return if (clean.isBlank()) "/" else clean
+        val path = pathAndQuery.substringBefore('?')
+        val query = pathAndQuery.substringAfter('?', "")
+        return (if (path.isBlank()) "/" else path) to query
     }
 
     private fun readChunked(input: InputStream): ByteArray {

@@ -17,6 +17,11 @@ import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.media3.exoplayer.ExoPlayer
 import com.wddclass.clicktocast.BuildConfig
+import com.wddclass.clicktocast.airplay.AirPlayAdvertiser
+import com.wddclass.clicktocast.airplay.AirPlayHandler
+import com.wddclass.clicktocast.airplay.AirPlayIdentity
+import com.wddclass.clicktocast.airplay.AirPlayTexts
+import com.wddclass.clicktocast.airplay.RendererAirPlaySink
 import com.wddclass.clicktocast.R
 import com.wddclass.clicktocast.dlna.DeviceProfile
 import com.wddclass.clicktocast.dlna.DlnaRenderer
@@ -78,6 +83,7 @@ class CastReceiverService : Service() {
     private lateinit var renderer: DlnaRenderer
     private lateinit var http: MiniHttpServer
     private lateinit var ssdp: SsdpAdvertiser
+    private lateinit var airplayMdns: AirPlayAdvertiser
     private var audio: AudioManager? = null
     private var multicast: WifiManager.MulticastLock? = null
     private var httpPort = Upnp.PREFERRED_PORT
@@ -118,12 +124,16 @@ class CastReceiverService : Service() {
         renderer.volumeApplier = { percent, muted -> main.post { applyVolume(percent, muted) } }
         val (percent, muted) = readVolume()
         renderer.adoptVolume(percent, muted, echo = false)
+        val airplay = AirPlayHandler({ airplayIdentity() }, RendererAirPlaySink(renderer))
         http = MiniHttpServer { request ->
-            RendererHttpHandler(renderer, { currentProfile() }, events).handle(request)
+            airplay.handle(request)
+                ?: RendererHttpHandler(renderer, { currentProfile() }, events).handle(request)
         }
         httpPort = http.start(Upnp.PREFERRED_PORT)
         ssdp = SsdpAdvertiser(profileProvider = { currentProfile() }, configId = { configId })
         ssdp.start()
+        airplayMdns = AirPlayAdvertiser(this, { httpPort }, { airplayIdentity() })
+        airplayMdns.start()
         refreshAddress()
         main.post(ticker)
         DmrLog.i("receiver ready as ${settings.deviceName} udn=uuid:${settings.deviceUuid} on port $httpPort")
@@ -135,6 +145,7 @@ class CastReceiverService : Service() {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
+        if (::airplayMdns.isInitialized) airplayMdns.stop()
         if (::ssdp.isInitialized) ssdp.stop()
         if (::http.isInitialized) http.stop()
         if (::playerBackend.isInitialized) playerBackend.release()
@@ -143,6 +154,12 @@ class CastReceiverService : Service() {
         } catch (_: Exception) {
         }
         super.onDestroy()
+    }
+
+    private fun airplayIdentity(): AirPlayIdentity {
+        val name = settings.deviceName.ifBlank { Upnp.DEFAULT_FRIENDLY_NAME }
+        val mac = NetworkAddresses.hardwareMac() ?: AirPlayTexts.macFromUuid(settings.deviceUuid)
+        return AirPlayIdentity(name, mac)
     }
 
     private fun currentProfile(): DeviceProfile = DeviceProfile(
@@ -332,6 +349,7 @@ class CastReceiverService : Service() {
             settings.browserUserAgent = browserUserAgent
             configId += 1
             if (::ssdp.isInitialized) ssdp.announceSoon()
+            if (::airplayMdns.isInitialized) airplayMdns.start()
             if (::renderer.isInitialized) onSession(renderer.snapshot())
         }
 
@@ -368,6 +386,7 @@ class CastReceiverService : Service() {
         override fun clearHistory() = historyStore.clear()
 
         override fun shutdown() {
+            if (::airplayMdns.isInitialized) airplayMdns.stop()
             if (::ssdp.isInitialized) ssdp.stop()
             if (::http.isInitialized) http.stop()
             stopForeground(true)

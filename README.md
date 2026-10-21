@@ -53,7 +53,8 @@ export ANDROID_HOME=...
 
 ## 已知限制
 
-- 只实现标准 DLNA / UPnP。AirPlay、Miracast、Chromecast、乐播 / 乐联私有协议都不在这个版本里。
+- DLNA / UPnP 之外，另有 AirPlay 视频地址播放：mDNS 宣告 `_airplay._tcp` 和 `_raop._tcp`，手机把视频 URL POST 到 `/play` 后由同一播放器开播。iOS 控制中心的屏幕镜像走 AirPlay 2 / FairPlay，这一版不解密，所以镜像选中后不会出画面。RAOP 只做发现，不传 RTP 音频。
+- Miracast、Chromecast、乐播 / 乐联私有协议仍未实现。
 - 爱奇艺、优酷、腾讯视频、Bilibili 的部分版本只走私有协议，或者地址带短时签名和 DRM。它们走标准 DLNA 时可以被发现；走私有协议时列表里不会出现本应用，或者给出地址后无法播放。
 - 不转码。编码、封装或 DRM 电视硬解不了，就会直接失败。
 - 控制面没有配对。请只在自己的家庭网络里使用，不要把 8192 端口映射到公网。

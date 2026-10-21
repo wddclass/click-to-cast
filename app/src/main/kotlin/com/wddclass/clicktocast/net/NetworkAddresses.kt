@@ -11,6 +11,24 @@ data class V6Nic(val name: String, val index: Int, val nif: NetworkInterface)
 object NetworkAddresses {
     fun bestIpv4(): String? = ipv4Nics().firstOrNull()?.ipv4
 
+    /** MAC of an up LAN interface, or null when the firmware hides it. */
+    fun hardwareMac(): String? {
+        val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+        for (nif in interfaces) {
+            if (!nif.isUp || nif.isLoopback) continue
+            val name = nif.name ?: continue
+            if (skip(name)) continue
+            val hw = try {
+                nif.hardwareAddress
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            if (hw.size < 6 || hw.all { it == 0.toByte() }) continue
+            return hw.take(6).joinToString(":") { byte -> "%02X".format(byte.toInt() and 0xFF) }
+        }
+        return null
+    }
+
     fun ipv4Nics(): List<LanNic> {
         val interfaces = NetworkInterface.getNetworkInterfaces() ?: return emptyList()
         val found = mutableListOf<LanNic>()

@@ -46,6 +46,7 @@ class DlnaRenderer(
     private var speed = "1"
     private var lastQuality = ""
     private var session = 0L
+    private var pendingFraction = 0.0
 
     var volumeApplier: ((percent: Int, muted: Boolean) -> Unit)? = null
 
@@ -168,8 +169,46 @@ class DlnaRenderer(
                 qualityChanged = true
             }
         }
+        val pendingSeek = synchronized(lock) {
+            if (pendingFraction > 0.0 && snap.durationMs > 0) {
+                val target = (snap.durationMs * pendingFraction).toLong()
+                pendingFraction = 0.0
+                target
+            } else {
+                null
+            }
+        }
+        if (pendingSeek != null) player.seekTo(pendingSeek)
         if (stateChanged) publish(Upnp.AVT)
         if (stateChanged || qualityChanged) emit()
+    }
+
+    /** AirPlay POST /play. Loads the URL and starts playback. [startFraction] is 0..1. */
+    fun castUrl(url: String, userAgent: String, startFraction: Double): Boolean {
+        if (setUri(url, "", userAgent).httpStatus != 200) return false
+        synchronized(lock) {
+            val fraction = startFraction.coerceIn(0.0, 1.0)
+            pendingFraction = if (fraction > 0.001) fraction else 0.0
+        }
+        return play("1").httpStatus == 200
+    }
+
+    fun pausePlayback() {
+        pause()
+    }
+
+    fun resumePlayback() {
+        play("1")
+    }
+
+    fun stopPlayback() {
+        stop()
+    }
+
+    fun seekSeconds(seconds: Double) {
+        val hasMedia = synchronized(lock) { uri.isNotBlank() }
+        if (!hasMedia) return
+        player.seekTo((seconds * 1000.0).toLong().coerceAtLeast(0))
     }
 
     fun adoptVolume(percent: Int, isMuted: Boolean, echo: Boolean) {
