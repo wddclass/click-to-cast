@@ -31,7 +31,7 @@ class RendererHttpHandler(
         request: HttpRequest,
         dispatch: (action: String, args: Map<String, String>) -> SoapResult,
     ): HttpResponse {
-        val body = request.body.toString(Charsets.UTF_8)
+        val body = String(request.body, Charsets.UTF_8)
         if (body.isBlank()) return soapResponse(SoapResult.fault(402, "Invalid Args"))
         val action = SoapCodec.actionName(request.header("soapaction"), body)
         if (action.isBlank()) return soapResponse(SoapResult.fault(401, "Invalid Action"))

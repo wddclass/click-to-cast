@@ -19,6 +19,11 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Keep core library desugaring off. D8's language desugar does not rewrite
+        // java.io methods, and desugar_jdk_libs does not backport
+        // ByteArrayOutputStream.toString(Charset) (API 33). Higher java.* calls
+        // have to be avoided; NewApi below fails the build when one slips in.
+        isCoreLibraryDesugaringEnabled = false
     }
 
     kotlinOptions {
@@ -71,6 +76,10 @@ android {
 
     lint {
         abortOnError = true
+        checkReleaseBuilds = true
+        // Fatal so lintVitalRelease (part of assembleRelease) rejects minSdk violations,
+        // including java.* methods that exist on the JDK but not on API 23.
+        fatal += setOf("NewApi")
         disable += setOf("InsecureBaseConfiguration", "UnusedAttribute")
     }
 

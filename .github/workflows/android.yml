@@ -23,13 +23,15 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "17"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        with:
+          # The action default is "tools platform-tools". The legacy "tools" package
+          # was removed from the SDK repository, so sdkmanager exits 1 before the build.
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          log-accepted-android-sdk-licenses: false
 
       - name: Unit tests and release APK
         run: ./gradlew test assembleRelease --stacktrace

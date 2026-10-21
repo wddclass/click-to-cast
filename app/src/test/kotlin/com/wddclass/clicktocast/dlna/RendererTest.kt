@@ -211,6 +211,34 @@ class RendererHttpTest {
     }
 
     @Test
+    fun handlerErrorDoesNotKillTheServer() {
+        val uncaught = java.util.concurrent.atomic.AtomicReference<Throwable>()
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, error -> uncaught.set(error) }
+        var first = true
+        val server = MiniHttpServer {
+            if (first) {
+                first = false
+                throw NoSuchMethodError("ByteArrayOutputStream.toString")
+            }
+            HttpResponse(200, "OK", emptyMap(), "alive".toByteArray())
+        }
+        val port = server.start(0)
+        try {
+            val failed = http("GET", "http://127.0.0.1:$port/")
+            assertEquals(500, failed.first)
+            val again = http("GET", "http://127.0.0.1:$port/")
+            assertEquals(200, again.first)
+            assertTrue(again.second.contains("alive"))
+            Thread.sleep(200)
+            assertEquals(null, uncaught.get())
+        } finally {
+            server.stop()
+            Thread.setDefaultUncaughtExceptionHandler(previous)
+        }
+    }
+
+    @Test
     fun snifferDetectsMislabeledHls() {
         val server = MiniHttpServer { request ->
             if (request.path.endsWith("/a.mp4")) {

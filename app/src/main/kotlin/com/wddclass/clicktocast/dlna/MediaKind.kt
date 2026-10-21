@@ -45,10 +45,10 @@ object MediaKindDetector {
             return MediaKind.FLV
         }
         if (bytes.size >= 12) {
-            val brand = bytes.copyOfRange(4, 8).toString(Charsets.US_ASCII)
+            val brand = String(bytes.copyOfRange(4, 8), Charsets.US_ASCII)
             if (brand == "ftyp") return MediaKind.PROGRESSIVE
         }
-        val text = bytes.toString(Charsets.ISO_8859_1).trimStart()
+        val text = String(bytes, Charsets.ISO_8859_1).trimStart()
         if (text.startsWith("#EXTM3U")) return MediaKind.HLS
         if (text.contains("<MPD")) return MediaKind.DASH
         return null

@@ -60,7 +60,8 @@ export ANDROID_HOME=...
 - 只保证 IPv4。访客网络、AP 隔离和部分 Mesh 会让 SSDP 组播过不去。
 - 进度主要靠控制点轮询 `GetPositionInfo`。GENA 通知的是状态变化，不是每一帧进度。
 - 外挂字幕、播放列表和下一首只做了最基本的保存，不会自动连播。
-- 尚未在雷鸟鹏 6 SE 真机上验收发现、起播、暂停、seek、4K/HDR 和长时间播放。
+- 雷鸟 Android 11 上，第一笔 HTTP 请求会调用仅 API 33 才有的 `ByteArrayOutputStream.toString(Charset)`，进程因此退出。请求行已改为 `String(bytes, charset)`，HTTP 工作线程按连接捕获 `Throwable`。
+- 发现、起播、暂停、seek、4K/HDR 和长时间播放仍未在雷鸟鹏 6 SE 上验收。
 
 ## 协议说明
 

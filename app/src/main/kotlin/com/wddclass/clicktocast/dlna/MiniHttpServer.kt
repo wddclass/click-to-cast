@@ -56,7 +56,14 @@ class MiniHttpServer(
     private val running = AtomicBoolean(false)
     private var socket: ServerSocket? = null
     private val workers = Executors.newFixedThreadPool(8) { runnable ->
-        Thread(runnable, "dmr-http").apply { isDaemon = true }
+        Thread(runnable, "dmr-http").apply {
+            isDaemon = true
+            // Android kills the process on any thread's uncaught exception.
+            // Swallow leftovers so one bad connection cannot take down the TV app.
+            uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, error ->
+                DmrLog.i("http worker died: ${error.javaClass.simpleName}: ${error.message}")
+            }
+        }
     }
 
     @Volatile
@@ -75,7 +82,19 @@ class MiniHttpServer(
         socket = server
         boundPort = server.localPort
         running.set(true)
-        Thread({ acceptLoop(server) }, "dmr-accept").apply { isDaemon = true }.start()
+        Thread({
+            try {
+                acceptLoop(server)
+            } catch (error: Throwable) {
+                DmrLog.i("http accept stopped: ${error.javaClass.simpleName}: ${error.message}")
+            }
+        }, "dmr-accept").apply {
+            isDaemon = true
+            uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, error ->
+                DmrLog.i("http accept died: ${error.javaClass.simpleName}: ${error.message}")
+            }
+            start()
+        }
         return boundPort
     }
 
@@ -98,11 +117,13 @@ class MiniHttpServer(
             workers.execute {
                 try {
                     handleClient(client)
-                } catch (_: Exception) {
+                } catch (error: Throwable) {
+                    // NoSuchMethodError is an Error, not an Exception. One connection must not crash the process.
+                    DmrLog.i("http connection failed: ${error.javaClass.simpleName}: ${error.message}")
                 } finally {
                     try {
                         client.close()
-                    } catch (_: Exception) {
+                    } catch (_: Throwable) {
                     }
                 }
             }
@@ -116,8 +137,8 @@ class MiniHttpServer(
         val request = readRequest(input, remote) ?: return
         val response = try {
             handler(request)
-        } catch (error: Exception) {
-            DmrLog.i("http handler failed: ${error.message}")
+        } catch (error: Throwable) {
+            DmrLog.i("http handler failed: ${error.javaClass.simpleName}: ${error.message}")
             HttpResponse(500, "Internal Server Error", emptyMap(), "error".toByteArray())
         }
         client.getOutputStream().use { output ->
@@ -187,12 +208,22 @@ class MiniHttpServer(
         val output = ByteArrayOutputStream()
         while (output.size() < 16_384) {
             val value = input.read()
-            if (value == -1) return if (output.size() == 0) null else output.toString(Charsets.ISO_8859_1)
+            if (value == -1) {
+                return if (output.size() == 0) null else decodeLine(output)
+            }
             if (value == '\n'.code) break
             if (value != '\r'.code) output.write(value)
         }
-        return output.toString(Charsets.ISO_8859_1)
+        return decodeLine(output)
     }
+
+    /**
+     * HTTP/1.1 header lines are ISO-8859-1.
+     * [ByteArrayOutputStream.toString] with a [java.nio.charset.Charset] exists only on API 33;
+     * Android 11 throws [NoSuchMethodError] and the default uncaught handler kills the app.
+     */
+    private fun decodeLine(output: ByteArrayOutputStream): String =
+        String(output.toByteArray(), Charsets.ISO_8859_1)
 
     companion object {
         private const val MAX_BODY = 1024 * 1024
