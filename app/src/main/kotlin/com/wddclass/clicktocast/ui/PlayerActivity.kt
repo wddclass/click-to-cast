@@ -22,6 +22,7 @@ class PlayerActivity : TvActivity() {
     private val main = Handler(Looper.getMainLooper())
     private var stopObserving: (() -> Unit)? = null
     private var osdVisible = true
+    private var userHidOsd = false
     private var seenSession = -1L
 
     private val hideOsd = Runnable {
@@ -33,10 +34,6 @@ class PlayerActivity : TvActivity() {
             if (osdVisible) paintTransport()
             main.postDelayed(this, 250)
         }
-    }
-
-    private val hideVolume = Runnable {
-        findViewById<TextView>(R.id.volume).visibility = View.GONE
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,7 +58,7 @@ class PlayerActivity : TvActivity() {
         bar.onScrub = { fraction, finished -> onScrub(fraction, finished) }
         buildSpeedChips()
         Pills.attach(findViewById(R.id.speed_button))
-        bar.requestFocus()
+        findViewById<ImageButton>(R.id.play_pause).requestFocus()
         reveal()
     }
 
@@ -89,71 +86,51 @@ class PlayerActivity : TvActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val code = event.keyCode
-        val menu = speedMenuOpen()
-        val focusId = currentFocus?.id ?: View.NO_ID
-        if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_MEDIA_STOP) {
-            if (event.action != KeyEvent.ACTION_DOWN) return true
-            if (menu && code == KeyEvent.KEYCODE_BACK) {
+        if (code == KeyEvent.KEYCODE_BACK) {
+            if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) return true
+            if (speedMenuOpen()) {
                 closeSpeedMenu(focusButton = true)
+                return true
+            }
+            if (osdVisible) {
+                hideOsdByUser()
                 return true
             }
             connection.api?.stopPlayback()
             finish()
             return true
         }
-        val handled = code == KeyEvent.KEYCODE_DPAD_LEFT ||
-            code == KeyEvent.KEYCODE_DPAD_RIGHT ||
-            code == KeyEvent.KEYCODE_DPAD_UP ||
-            code == KeyEvent.KEYCODE_DPAD_DOWN ||
-            code == KeyEvent.KEYCODE_DPAD_CENTER ||
-            code == KeyEvent.KEYCODE_ENTER ||
-            code == KeyEvent.KEYCODE_NUMPAD_ENTER ||
-            code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
-            code == KeyEvent.KEYCODE_MEDIA_PLAY ||
-            code == KeyEvent.KEYCODE_MEDIA_PAUSE
-        if (!handled) return super.dispatchKeyEvent(event)
-        if (menu && (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT ||
-                code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN ||
-                code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER ||
-                code == KeyEvent.KEYCODE_NUMPAD_ENTER)
-        ) {
-            if (event.action == KeyEvent.ACTION_DOWN) reveal()
-            return super.dispatchKeyEvent(event)
-        }
-        val betweenControls = focusId == R.id.play_pause || focusId == R.id.speed_button
-        if (betweenControls && (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)) {
-            if (event.action == KeyEvent.ACTION_DOWN) reveal()
-            return super.dispatchKeyEvent(event)
-        }
-        if (event.action != KeyEvent.ACTION_DOWN) return true
-        if (event.repeatCount > 0 &&
-            code != KeyEvent.KEYCODE_DPAD_LEFT &&
-            code != KeyEvent.KEYCODE_DPAD_RIGHT &&
-            code != KeyEvent.KEYCODE_DPAD_UP &&
-            code != KeyEvent.KEYCODE_DPAD_DOWN
-        ) {
+        if (code == KeyEvent.KEYCODE_MEDIA_STOP) {
+            if (event.action != KeyEvent.ACTION_DOWN) return true
+            connection.api?.stopPlayback()
+            finish()
             return true
         }
+        if (!isTransportKey(code)) return super.dispatchKeyEvent(event)
+        if (!osdVisible) return hiddenTransport(event, code)
+        if (speedMenuOpen() && focusInSpeedMenu() && isDirectional(code)) {
+            if (event.action == KeyEvent.ACTION_DOWN) reveal()
+            return super.dispatchKeyEvent(event)
+        }
+        val onSeekBar = currentFocus?.id == R.id.progress
+        if (onSeekBar && (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+            if (event.action != KeyEvent.ACTION_DOWN) return true
+            val delta = if (code == KeyEvent.KEYCODE_DPAD_LEFT) -10_000L else 10_000L
+            connection.api?.seekBy(delta)
+            reveal()
+            return true
+        }
+        if (isDirectional(code)) {
+            if (event.action == KeyEvent.ACTION_DOWN) reveal()
+            return super.dispatchKeyEvent(event)
+        }
+        if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) return true
         val api = connection.api
         when (code) {
-            KeyEvent.KEYCODE_DPAD_LEFT -> api?.seekBy(-10_000)
-            KeyEvent.KEYCODE_DPAD_RIGHT -> api?.seekBy(10_000)
-            KeyEvent.KEYCODE_DPAD_UP -> {
-                api?.adjustVolume(5)
-                showVolume()
-            }
-            KeyEvent.KEYCODE_DPAD_DOWN -> {
-                api?.adjustVolume(-5)
-                showVolume()
-            }
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER,
             KeyEvent.KEYCODE_NUMPAD_ENTER,
-            -> when (focusId) {
-                R.id.speed_button -> openSpeedMenu()
-                R.id.play_pause -> api?.togglePlay()
-                else -> api?.togglePlay()
-            }
+            -> if (currentFocus?.id == R.id.speed_button) openSpeedMenu() else api?.togglePlay()
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_MEDIA_PLAY,
             KeyEvent.KEYCODE_MEDIA_PAUSE,
@@ -163,6 +140,40 @@ class PlayerActivity : TvActivity() {
         return true
     }
 
+    private fun hiddenTransport(event: KeyEvent, code: Int): Boolean {
+        if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) {
+            return super.dispatchKeyEvent(event)
+        }
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        when (code) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> connection.api?.seekBy(-10_000)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> connection.api?.seekBy(10_000)
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PAUSE,
+            -> connection.api?.togglePlay()
+        }
+        reveal()
+        return true
+    }
+
+    private fun isTransportKey(code: Int): Boolean = isDirectional(code) ||
+        code == KeyEvent.KEYCODE_DPAD_CENTER ||
+        code == KeyEvent.KEYCODE_ENTER ||
+        code == KeyEvent.KEYCODE_NUMPAD_ENTER ||
+        code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
+        code == KeyEvent.KEYCODE_MEDIA_PLAY ||
+        code == KeyEvent.KEYCODE_MEDIA_PAUSE
+
+    private fun isDirectional(code: Int): Boolean =
+        code == KeyEvent.KEYCODE_DPAD_LEFT ||
+            code == KeyEvent.KEYCODE_DPAD_RIGHT ||
+            code == KeyEvent.KEYCODE_DPAD_UP ||
+            code == KeyEvent.KEYCODE_DPAD_DOWN
+
     private fun render(state: UiState) {
         if (!state.showPlayer) {
             finish()
@@ -170,6 +181,7 @@ class PlayerActivity : TvActivity() {
         }
         if (state.session != seenSession) {
             seenSession = state.session
+            userHidOsd = false
             closeSpeedMenu(focusButton = false)
             findViewById<ThinSeekBar>(R.id.progress).cancelScrub()
         }
@@ -182,6 +194,7 @@ class PlayerActivity : TvActivity() {
             hints.tag = "error"
             hints.text = state.error
             hints.setTextColor(getColor(R.color.danger))
+            userHidOsd = false
             setOsdVisible(true)
             main.removeCallbacks(hideOsd)
         } else if (hints.tag == "error") {
@@ -190,8 +203,8 @@ class PlayerActivity : TvActivity() {
             hints.setTextColor(getColor(R.color.muted))
             reveal()
         } else if (state.playing) {
-            armHide()
-        } else {
+            if (!userHidOsd) armHide()
+        } else if (!userHidOsd) {
             main.removeCallbacks(hideOsd)
             setOsdVisible(true)
         }
@@ -224,8 +237,32 @@ class PlayerActivity : TvActivity() {
     }
 
     private fun reveal() {
+        userHidOsd = false
         setOsdVisible(true)
+        if (!focusedOnControl()) findViewById<View>(R.id.play_pause).requestFocus()
         armHide()
+    }
+
+    private fun hideOsdByUser() {
+        userHidOsd = true
+        main.removeCallbacks(hideOsd)
+        findViewById<View>(R.id.speed_row).visibility = View.GONE
+        setOsdVisible(false)
+    }
+
+    private fun focusInSpeedMenu(): Boolean {
+        val row = findViewById<LinearLayout>(R.id.speed_row)
+        return currentFocus?.parent == row
+    }
+
+    private fun focusedOnControl(): Boolean {
+        val id = currentFocus?.id ?: return false
+        if (id == R.id.play_pause || id == R.id.speed_button || id == R.id.progress) return true
+        val row = findViewById<LinearLayout>(R.id.speed_row)
+        for (index in 0 until row.childCount) {
+            if (row.getChildAt(index).id == id) return true
+        }
+        return false
     }
 
     private fun armHide() {
@@ -245,15 +282,6 @@ class PlayerActivity : TvActivity() {
     private fun setOsdVisible(visible: Boolean) {
         osdVisible = visible
         findViewById<View>(R.id.osd).visibility = if (visible) View.VISIBLE else View.GONE
-    }
-
-    private fun showVolume() {
-        val volume = connection.api?.snapshot()?.volume ?: return
-        val label = findViewById<TextView>(R.id.volume)
-        label.visibility = View.VISIBLE
-        label.text = getString(R.string.volume_label, volume)
-        main.removeCallbacks(hideVolume)
-        main.postDelayed(hideVolume, 1_500)
     }
 
     private fun speedMenuOpen(): Boolean =
@@ -291,9 +319,9 @@ class PlayerActivity : TvActivity() {
     private fun buildSpeedChips() {
         val row = findViewById<LinearLayout>(R.id.speed_row)
         val density = resources.displayMetrics.density
-        val padH = (22 * density).toInt()
-        val padV = (10 * density).toInt()
-        val gap = (12 * density).toInt()
+        val padH = (14 * density).toInt()
+        val padV = (6 * density).toInt()
+        val gap = (8 * density).toInt()
         val chips = ArrayList<TextView>()
         PlaybackRates.steps.forEach { rate ->
             val label = PlaybackRates.label(rate) ?: return@forEach
@@ -301,7 +329,7 @@ class PlayerActivity : TvActivity() {
             chip.id = View.generateViewId()
             chip.text = getString(R.string.speed_choice, label)
             chip.tag = label
-            chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             chip.setTextColor(getColorStateList(R.color.pill_text))
             chip.setBackgroundResource(R.drawable.bg_pill)
             chip.setPadding(padH, padV, padH, padV)
@@ -324,6 +352,7 @@ class PlayerActivity : TvActivity() {
             chip.nextFocusLeftId = chips.getOrNull(index - 1)?.id ?: chip.id
             chip.nextFocusRightId = chips.getOrNull(index + 1)?.id ?: chip.id
             chip.nextFocusUpId = R.id.speed_button
+            chip.nextFocusDownId = R.id.progress
         }
         Pills.attach(*chips.toTypedArray())
     }

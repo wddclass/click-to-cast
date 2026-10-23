@@ -64,10 +64,10 @@ class AirPlayHandler(
     fun handle(request: HttpRequest): HttpResponse? {
         val response = dispatch(request)
         if (response == null && !shouldLog(request)) return null
-        val line = response?.let { "${protocolName(request)} ${it.status}" } ?: "not handled"
+        val line = response?.let { "${protocolName(request)} ${it.status} body=${it.body.size}" } ?: "not handled"
         DmrLog.i(
             "airplay ${request.protocol} ${request.method} ${request.path} from ${request.remoteIp} " +
-                "${headerSummary(request)} -> $line",
+                "verified=${pairing.isVerified(request.remoteIp)} ${headerSummary(request)} -> $line",
         )
         return response?.let { decorate(request, it) }
     }
@@ -87,7 +87,7 @@ class AirPlayHandler(
         "/rate" -> if (request.method == "POST" || request.method == "GET") rate(request) else null
         "/scrub" -> if (request.method == "POST" || request.method == "GET") scrub(request) else null
         "/reverse" -> if (request.method == "POST" || request.method == "GET") reverse(request) else null
-        else -> null
+        else -> if (isAirPlayTransport(request)) unsupported(request) else null
     }
 
     private fun shouldLog(request: HttpRequest): Boolean {
@@ -105,8 +105,29 @@ class AirPlayHandler(
             val value = request.header(name) ?: continue
             parts += "$name=${value.take(80)}"
         }
-        if (request.body.isNotEmpty()) parts += "bytes=${request.body.size}"
+        if (request.body.isNotEmpty()) {
+            parts += "bytes=${request.body.size}"
+            parts += "hex=${AirPlayKeys.hexPrefix(request.body, 24)}"
+        }
         return parts.joinToString(" ")
+    }
+
+    private fun isAirPlayTransport(request: HttpRequest): Boolean {
+        if (request.path.startsWith("/dmr")) return false
+        if (request.protocol.startsWith("RTSP", ignoreCase = true)) return true
+        if (request.header("user-agent")?.contains("AirPlay", ignoreCase = true) == true) return true
+        if (request.header("x-apple-session-id") != null) return true
+        if (request.header("x-apple-protocolversion") != null) return true
+        return false
+    }
+
+    private fun unsupported(request: HttpRequest): HttpResponse {
+        DmrLog.i(
+            "airplay no handler for ${request.method} ${request.path} from ${request.remoteIp} " +
+                "verified=${pairing.isVerified(request.remoteIp)} hex=${AirPlayKeys.hexPrefix(request.body, 24)}; " +
+                "plaintext /play works after pair-verify, FairPlay and ChaCha control do not",
+        )
+        return empty(501, "Not Implemented")
     }
 
     private fun protocolName(request: HttpRequest): String =
@@ -120,7 +141,8 @@ class AirPlayHandler(
         }
         val agent = request.header("user-agent")?.takeIf { it.isNotBlank() } ?: "AirPlay Darwin"
         DmrLog.i(
-            "airplay play from ${request.remoteIp} url=${redactUrl(command.url)} start=${command.startFraction}",
+            "airplay play from ${request.remoteIp} verified=${pairing.isVerified(request.remoteIp)} " +
+                "url=${redactUrl(command.url)} start=${command.startFraction}",
         )
         sink.play(command.url, command.startFraction, agent)
         return empty(200, "OK")
@@ -184,7 +206,14 @@ class AirPlayHandler(
             DmrLog.i("airplay pair-verify failed from ${request.remoteIp}")
             return empty(403, "Forbidden")
         }
-        DmrLog.i("airplay pair-verify step ok from ${request.remoteIp} reply=${reply.size}")
+        if (reply.isEmpty()) {
+            DmrLog.i(
+                "airplay pair-verify complete from ${request.remoteIp}; " +
+                    "next step is plaintext POST /play. ChaCha20-Poly1305 control is not implemented",
+            )
+        } else {
+            DmrLog.i("airplay pair-verify step1 ok from ${request.remoteIp} reply=${reply.size}")
+        }
         return octets(reply)
     }
 

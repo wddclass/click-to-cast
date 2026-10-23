@@ -36,7 +36,7 @@
     <string name="about_version">版本 %1$s</string>
     <string name="back">返回</string>
     <string name="play_pause">播放或暂停</string>
-    <string name="remote_hints">◀▶  快退 / 快进 10 秒      OK 暂停      右侧「倍速」可调      返回 退出投屏</string>
+    <string name="remote_hints">左右移动焦点。进度条上左右快进 10 秒，上键回到按钮。OK 暂停。返回先隐藏控制条</string>
     <string name="seek_bar">播放进度</string>
     <string name="speed_menu">播放速度</string>
     <string name="speed_button">倍速 1×</string>
@@ -52,7 +52,6 @@
     <string name="notif_arrival">收到投屏：%1$s</string>
     <string name="arrival_channel_name">投屏到达</string>
     <string name="arrival_channel_desc">后台收到投屏时提醒并打开播放画面</string>
-    <string name="volume_label">音量 %1$d</string>
     <string name="opening">正在打开视频</string>
     <string name="channel_name">投屏接收</string>
     <string name="channel_desc">保持电视可被手机发现</string>

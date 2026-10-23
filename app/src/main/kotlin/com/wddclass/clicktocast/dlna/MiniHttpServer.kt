@@ -230,7 +230,10 @@ class MiniHttpServer(
 
     private fun splitTarget(target: String): Pair<String, String> {
         val raw = target.trim()
-        val pathAndQuery = if (raw.startsWith("http://") || raw.startsWith("https://")) {
+        val pathAndQuery = if (
+            raw.startsWith("http://") || raw.startsWith("https://") ||
+            raw.startsWith("rtsp://") || raw.startsWith("rtsps://")
+        ) {
             "/" + raw.substringAfter("://").substringAfter('/', "")
         } else {
             raw

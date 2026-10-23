@@ -15,6 +15,9 @@ class AirPlayPairing(private val keys: AirPlayKeys) {
     private val lock = Any()
     private val pending = HashMap<String, VerifyState>()
     private val setupKeys = HashMap<String, ByteArray>()
+    private val verified = HashSet<String>()
+
+    fun isVerified(remoteIp: String): Boolean = synchronized(lock) { remoteIp in verified }
 
     fun pairSetup(remoteIp: String, body: ByteArray): ByteArray? {
         if (body.size != 32) return null
@@ -54,7 +57,10 @@ class AirPlayPairing(private val keys: AirPlayKeys) {
         val signature = AirPlayKeys.ctr(state.aesKey, state.aesIv, 64, cipher)
         val message = state.clientX + state.serverX
         if (!AirPlayKeys.verify(state.clientEd, message, signature)) return null
-        synchronized(lock) { pending.remove(remoteIp) }
+        synchronized(lock) {
+            pending.remove(remoteIp)
+            verified.add(remoteIp)
+        }
         return ByteArray(0)
     }
 

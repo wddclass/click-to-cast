@@ -54,6 +54,11 @@ class AirPlayTest {
         assertEquals(17, mac.length)
         val pk = AirPlayKeys.fromSeed(ByteArray(32) { 7 }).publicKeyHex
         val txt = AirPlayTexts.airplayTxt(mac, pk)
+        assertEquals("0x5A7FFFF7,0x1E", AirPlayTexts.FEATURES)
+        assertEquals(130367356919L, AirPlayTexts.FEATURES_INT)
+        val low = AirPlayTexts.FEATURES_INT and 0xFFFFFFFFL
+        assertEquals(0x80L, low and 0x80L)
+        assertEquals(0x04L, low and 0x04L)
         assertEquals(AirPlayTexts.FEATURES, txt["features"])
         assertEquals(pk, txt["pk"])
         assertEquals(64, pk.length)
@@ -215,6 +220,31 @@ class AirPlayTest {
             HttpRequest("POST", "/pair-verify", mapOf("cseq" to "3"), second, "192.168.123.8", protocol = "RTSP/1.0"),
         )
         assertEquals(200, step2?.status)
+        assertEquals(0, step2!!.body.size)
+
+        val play = handler.handle(
+            HttpRequest(
+                "POST",
+                "/play",
+                mapOf("cseq" to "4", "content-type" to "text/parameters"),
+                "Content-Location: http://cdn.example/after-verify.mp4\nStart-Position: 0\n".toByteArray(),
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(200, play?.status)
+
+        val setupStream = handler.handle(
+            HttpRequest(
+                "SETUP",
+                "/stream",
+                mapOf("cseq" to "5"),
+                ByteArray(0),
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(501, setupStream?.status)
 
         val forged = second.copyOf()
         forged[forged.size - 1] = (forged[forged.size - 1].toInt() xor 0xFF).toByte()

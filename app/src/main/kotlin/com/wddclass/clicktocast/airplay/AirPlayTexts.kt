@@ -25,15 +25,15 @@ object AirPlayTexts {
     const val MODEL = "AppleTV3,2"
 
     /**
-     * Low 32 bits, then high 32 bits. Video, photos, HLS and audio stay on.
-     * Screen (bit 7) and VideoFairPlay (bit 2) are off so iOS is steered toward a
-     * video URL (/play) instead of FairPlay mirroring. The high half stays 0x1E,
-     * which is the mask that made iOS 26 send the 32-byte legacy pair-setup.
+     * Low 32 bits, then high 32 bits. This is the v6 mask that iOS 26 actually
+     * listed: screen mirroring (bit 7) and the audio/video bits stay on.
+     * Clearing those bits made the picker hide the device. FairPlay still is
+     * not implemented; /fp-setup answers 501.
      */
-    const val FEATURES = "0x5A7FFF73,0x1E"
+    const val FEATURES = "0x5A7FFFF7,0x1E"
 
-    /** (0x1E << 32) | 0x5A7FFF73. /info must use this full value. */
-    const val FEATURES_INT = 130367356787L
+    /** (0x1E << 32) | 0x5A7FFFF7. /info must use this full value. */
+    const val FEATURES_INT = 130367356919L
 
     fun macFromUuid(uuid: String): String {
         val hex = uuid.lowercase().filter { it in '0'..'9' || it in 'a'..'f' }
@@ -116,8 +116,8 @@ object AirPlayTexts {
 
     /**
      * Binary plist for RTSP `GET /info`. Keys and the public key bytes match the mDNS TXT.
-     * statusFlags 4 is the usual "ready, no password" value. Screen mirroring is not offered
-     * as a display stream; FairPlay is not implemented.
+     * statusFlags 4 is the usual "ready, no password" value. The feature mask still
+     * advertises screen mirroring so iOS lists the device; FairPlay is not implemented.
      */
     fun infoPlist(name: String, deviceId: String, publicKey: ByteArray): ByteArray {
         val shown = name.trim().ifBlank { "投屏点我" }

@@ -11,7 +11,7 @@ import kotlin.math.max
 
 /**
  * Focusable progress bar. A finger drag previews the position and seeks when it lifts.
- * Remote left and right are handled by the player screen, so focus stays on the bar.
+ * Remote left and right seek only while this bar is focused. Otherwise they move focus.
  */
 class ThinSeekBar @JvmOverloads constructor(
     context: Context,
