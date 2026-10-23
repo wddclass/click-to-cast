@@ -159,9 +159,43 @@
         android:layout_gravity="bottom"
         android:clipChildren="false"
         android:clipToPadding="false"
-        android:gravity="center"
-        android:orientation="horizontal"
-        android:paddingBottom="40dp">
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingBottom="36dp">
+
+        <LinearLayout
+            android:id="@+id/overlay_banner"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="18dp"
+            android:clipChildren="false"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:maxWidth="760dp"
+                android:text="@string/overlay_needed"
+                android:textColor="@color/source"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/overlay_open"
+                style="@style/Pill"
+                android:layout_marginStart="16dp"
+                android:text="@string/overlay_open"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:gravity="center"
+            android:orientation="horizontal">
 
         <TextView
             android:id="@+id/open_settings"
@@ -183,5 +217,6 @@
             android:layout_marginStart="16dp"
             android:nextFocusLeft="@id/open_history"
             android:text="@string/nav_about" />
+        </LinearLayout>
     </LinearLayout>
 </FrameLayout>

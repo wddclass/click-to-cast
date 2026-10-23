@@ -1,6 +1,7 @@
 package com.wddclass.clicktocast.ui
 
 import android.os.Bundle
+import android.view.View
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
@@ -23,7 +24,9 @@ class SettingsActivity : TvActivity() {
         val restore = findViewById<TextView>(R.id.restore_name)
         val save = findViewById<TextView>(R.id.save)
         val stop = findViewById<TextView>(R.id.stop_service)
-        Pills.attach(auto, browser, player, restore, save, stop)
+        val overlay = findViewById<TextView>(R.id.overlay_grant)
+        Pills.attach(auto, browser, player, restore, save, stop, overlay)
+        overlay.setOnClickListener { OverlayGuide.open(this) }
 
         name.setText(settings.deviceName.ifBlank { Upnp.DEFAULT_FRIENDLY_NAME })
         var autoStart = settings.autoStart
@@ -67,9 +70,21 @@ class SettingsActivity : TvActivity() {
         save.requestFocus()
     }
 
+    override fun onResume() {
+        super.onResume()
+        paintOverlay()
+    }
+
     override fun onStart() {
         super.onStart()
         connection.bind { }
+    }
+
+    private fun paintOverlay() {
+        val allowed = OverlayGuide.allowed(this)
+        findViewById<TextView>(R.id.overlay_status).text =
+            getString(if (allowed) R.string.overlay_on else R.string.overlay_off)
+        findViewById<TextView>(R.id.overlay_grant).visibility = if (allowed) View.GONE else View.VISIBLE
     }
 
     override fun onStop() {

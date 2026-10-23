@@ -11,12 +11,14 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.wddclass.clicktocast.dlna.EnginePlayback
 import com.wddclass.clicktocast.dlna.MediaKind
+import com.wddclass.clicktocast.dlna.PlaybackMessages
 import com.wddclass.clicktocast.dlna.PlaybackRequest
 import com.wddclass.clicktocast.dlna.PlaybackSnapshot
 import com.wddclass.clicktocast.dlna.PlayerBackend
@@ -39,6 +41,9 @@ class ExoPlayerBackend(
 
     @Volatile
     private var cached = PlaybackSnapshot()
+
+    @Volatile
+    private var rate = 1f
 
     val player: ExoPlayer
 
@@ -81,7 +86,7 @@ class ExoPlayerBackend(
         main.post(object : Runnable {
             override fun run() {
                 publish()
-                main.postDelayed(this, 500)
+                main.postDelayed(this, 250)
             }
         })
     }
@@ -89,6 +94,14 @@ class ExoPlayerBackend(
     override fun load(request: PlaybackRequest) {
         val token = generation.incrementAndGet()
         playRequested.set(false)
+        rate = 1f
+        main.post {
+            if (token != generation.get()) return@post
+            player.stop()
+            player.clearMediaItems()
+            player.setPlaybackSpeed(rate)
+            publish()
+        }
         worker.execute {
             val kind = StreamSniffer.sniff(request.uri, request.userAgent, request.headers)
             main.post {
@@ -133,6 +146,14 @@ class ExoPlayerBackend(
         }
     }
 
+    override fun setSpeed(speed: Float) {
+        rate = speed.coerceIn(0.5f, 2f)
+        main.post {
+            player.setPlaybackSpeed(rate)
+            publish()
+        }
+    }
+
     override fun snapshot(): PlaybackSnapshot = cached
 
     fun release() {
@@ -158,6 +179,9 @@ class ExoPlayerBackend(
                     mimeFor(kind, request.mimeHint)?.let { setMimeType(it) }
                 }
                 .build()
+            player.stop()
+            player.clearMediaItems()
+            player.setPlaybackSpeed(rate)
             player.setMediaSource(DefaultMediaSourceFactory(http).createMediaSource(item))
             player.prepare()
             if (request.startPositionMs > 0) player.seekTo(request.startPositionMs)
@@ -220,21 +244,17 @@ class ExoPlayerBackend(
         MediaKind.UNKNOWN -> null
     }
 
-    private fun friendly(error: PlaybackException): String = when (error.errorCode) {
-        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
-        -> "网络连接失败"
-        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
-        PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
-        -> "视频地址无法打开"
-        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
-        PlaybackException.ERROR_CODE_DECODING_FAILED,
-        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
-        -> "这部电视解不了这个视频"
-        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
-        PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
-        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
-        -> "视频格式无法识别"
-        else -> "播放失败"
+    private fun friendly(error: PlaybackException): String =
+        PlaybackMessages.describe(error.errorCode, httpStatus(error))
+
+    private fun httpStatus(error: Throwable): Int? {
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 8) {
+            if (current is HttpDataSource.InvalidResponseCodeException) return current.responseCode
+            current = current.cause
+            depth++
+        }
+        return null
     }
 }

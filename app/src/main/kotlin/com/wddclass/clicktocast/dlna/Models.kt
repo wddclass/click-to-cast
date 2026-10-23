@@ -32,6 +32,7 @@ interface PlayerBackend {
     fun pause()
     fun stop()
     fun seekTo(positionMs: Long)
+    fun setSpeed(speed: Float)
     fun snapshot(): PlaybackSnapshot
 }
 

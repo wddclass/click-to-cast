@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.View
 import android.widget.TextView
 import com.wddclass.clicktocast.R
 import com.wddclass.clicktocast.dlna.Upnp
@@ -21,12 +22,19 @@ class HomeActivity : TvActivity() {
         val settings = findViewById<TextView>(R.id.open_settings)
         val history = findViewById<TextView>(R.id.open_history)
         val about = findViewById<TextView>(R.id.open_about)
-        Pills.attach(settings, history, about)
+        val overlay = findViewById<TextView>(R.id.overlay_open)
+        Pills.attach(settings, history, about, overlay)
+        overlay.setOnClickListener { OverlayGuide.open(this) }
         settings.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         history.setOnClickListener { startActivity(Intent(this, HistoryActivity::class.java)) }
         about.setOnClickListener { startActivity(Intent(this, AboutActivity::class.java)) }
         settings.requestFocus()
         render(UiState())
+    }
+
+    override fun onResume() {
+        super.onResume()
+        paintOverlay()
     }
 
     override fun onStart() {
@@ -66,5 +74,10 @@ class HomeActivity : TvActivity() {
         }
         findViewById<TextView>(R.id.status).setTextColor(color)
         (findViewById<android.view.View>(R.id.status_dot).background as? GradientDrawable)?.setColor(color)
+    }
+
+    private fun paintOverlay() {
+        val allowed = OverlayGuide.allowed(this)
+        findViewById<View>(R.id.overlay_banner).visibility = if (allowed) View.GONE else View.VISIBLE
     }
 }

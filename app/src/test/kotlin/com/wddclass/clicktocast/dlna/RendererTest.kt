@@ -38,6 +38,12 @@ class FakePlayer : PlayerBackend {
         snap = snap.copy(positionMs = position)
     }
 
+    var playbackSpeed = 1f
+
+    override fun setSpeed(speed: Float) {
+        playbackSpeed = speed
+    }
+
     override fun snapshot(): PlaybackSnapshot = snap.copy(positionMs = position, durationMs = duration)
 
     fun fail(message: String) {
@@ -124,6 +130,49 @@ class DlnaRendererTest {
         assertEquals("STOPPED", renderer.snapshot().transportState)
         assertFalse(renderer.snapshot().showPlayer)
         assertEquals(200, renderer.handleCm("GetProtocolInfo", emptyMap()).httpStatus)
+    }
+
+    @Test
+    fun localSpeedResumesAndNewCastReplaces() {
+        fun cast(url: String) = renderer.handleAv(
+            "SetAVTransportURI",
+            mapOf("InstanceID" to "0", "CurrentURI" to url, "CurrentURIMetaData" to ""),
+            null,
+        )
+        assertEquals(200, cast("http://cdn.example/a.mp4").httpStatus)
+        assertFalse(renderer.snapshot().showPlayer)
+        assertEquals(200, renderer.handleAv("Play", mapOf("Speed" to "1.0"), null).httpStatus)
+        assertTrue(renderer.setLocalSpeed(1.5))
+        assertFalse(renderer.setLocalSpeed(3.0))
+        assertEquals(1.5f, player.playbackSpeed)
+        player.position = 12_000
+        assertEquals(200, renderer.handleAv("Pause", emptyMap(), null).httpStatus)
+        assertEquals(200, renderer.handleAv("Play", mapOf("Speed" to "1"), null).httpStatus)
+        assertEquals("PLAYING", renderer.snapshot().transportState)
+        assertEquals(12_000L, player.position)
+        val kept = renderer.handleAv("GetTransportInfo", emptyMap(), null)
+        assertTrue(kept.body.contains("<CurrentSpeed>1.5</CurrentSpeed>"))
+        assertEquals(500, renderer.handleAv("Play", mapOf("Speed" to "2"), null).httpStatus)
+        assertEquals(1.5f, player.playbackSpeed)
+
+        renderer.adoptVolume(37, false, echo = false)
+        val volume = renderer.handleRc("GetVolume", emptyMap())
+        assertTrue(volume.body.contains(">37<"))
+
+        assertEquals(200, cast("http://cdn.example/b.mp4").httpStatus)
+        assertTrue(renderer.snapshot().showPlayer)
+        assertEquals("http://cdn.example/b.mp4", player.request?.uri)
+        assertEquals(0L, player.position)
+        assertEquals(1f, player.playbackSpeed)
+        val replaced = renderer.handleAv("GetTransportInfo", emptyMap(), null)
+        assertTrue(replaced.body.contains("<CurrentSpeed>1</CurrentSpeed>"))
+
+        renderer.onEngineUpdate(
+            PlaybackSnapshot(EnginePlayback.ERROR, 0, 90_000, PlaybackMessages.EXPIRED),
+        )
+        assertEquals(PlaybackMessages.EXPIRED, renderer.snapshot().error)
+        assertEquals("ERROR_OCCURRED", renderer.snapshot().transportStatus)
+        assertTrue(renderer.snapshot().showPlayer)
     }
 
     @Test

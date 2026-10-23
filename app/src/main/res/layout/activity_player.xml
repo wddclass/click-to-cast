@@ -3,7 +3,8 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg">
+    android:background="@color/bg"
+    android:clipChildren="false">
 
     <androidx.media3.ui.PlayerView
         android:id="@+id/player_view"
@@ -17,7 +18,10 @@
     <FrameLayout
         android:id="@+id/osd"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        android:clickable="true"
+        android:clipChildren="false"
+        android:focusable="false">
 
         <View
             android:layout_width="match_parent"
@@ -64,6 +68,8 @@
             android:layout_height="wrap_content"
             android:layout_gravity="bottom"
             android:orientation="vertical"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:paddingStart="40dp"
             android:paddingEnd="48dp"
             android:paddingBottom="36dp">
@@ -76,12 +82,13 @@
 
                 <ImageButton
                     android:id="@+id/play_pause"
-                    android:layout_width="52dp"
-                    android:layout_height="52dp"
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
                     android:background="@drawable/bg_play_circle"
                     android:contentDescription="@string/play_pause"
                     android:focusable="true"
-                    android:padding="14dp"
+                    android:nextFocusRight="@id/progress"
+                    android:padding="16dp"
                     android:scaleType="centerInside"
                     android:src="@drawable/ic_pause"
                     app:tint="@null" />
@@ -99,10 +106,14 @@
                 <com.wddclass.clicktocast.ui.ThinSeekBar
                     android:id="@+id/progress"
                     android:layout_width="0dp"
-                    android:layout_height="24dp"
+                    android:layout_height="48dp"
                     android:layout_marginStart="12dp"
                     android:layout_marginEnd="12dp"
-                    android:layout_weight="1" />
+                    android:layout_weight="1"
+                    android:contentDescription="@string/seek_bar"
+                    android:focusable="true"
+                    android:nextFocusLeft="@id/play_pause"
+                    android:nextFocusRight="@id/speed_button" />
 
                 <TextView
                     android:id="@+id/duration"
@@ -113,7 +124,29 @@
                     android:text="--:--:--"
                     android:textColor="@color/text"
                     android:textSize="16sp" />
+
+                <TextView
+                    android:id="@+id/speed_button"
+                    style="@style/Pill"
+                    android:layout_marginStart="16dp"
+                    android:contentDescription="@string/speed_menu"
+                    android:nextFocusLeft="@id/progress"
+                    android:text="@string/speed_button"
+                    android:textSize="16sp" />
             </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/speed_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/hints"

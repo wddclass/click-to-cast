@@ -15,6 +15,7 @@ data class SessionSnapshot(
     val quality: String,
     val playing: Boolean,
     val session: Long,
+    val speed: String = "1",
 )
 
 /**
@@ -47,6 +48,8 @@ class DlnaRenderer(
     private var lastQuality = ""
     private var session = 0L
     private var pendingFraction = 0.0
+    /** Keep the player on screen while a new URI replaces one that was already showing. */
+    private var replaceHold = false
 
     var volumeApplier: ((percent: Int, muted: Boolean) -> Unit)? = null
 
@@ -202,6 +205,7 @@ class DlnaRenderer(
             startPositionMs = 0L,
         )
         synchronized(lock) {
+            replaceHold = showingLocked()
             uri = trimmed
             metadata = ""
             this.title = resolvedTitle
@@ -218,6 +222,7 @@ class DlnaRenderer(
             pendingFraction = 0.0
         }
         DmrLog.i("replay ${redactUrl(trimmed)} title=$resolvedTitle")
+        player.setSpeed(1f)
         player.load(request)
         publish(Upnp.AVT)
         emit()
@@ -301,6 +306,7 @@ class DlnaRenderer(
             startPositionMs = 0L,
         )
         synchronized(lock) {
+            replaceHold = showingLocked()
             uri = trimmed
             metadata = rawMetadata
             title = resolvedTitle
@@ -314,8 +320,10 @@ class DlnaRenderer(
             transportStatus = "OK"
             errorText = null
             speed = "1"
+            pendingFraction = 0.0
         }
         DmrLog.i("set uri ${redactUrl(trimmed)} title=$resolvedTitle")
+        player.setSpeed(1f)
         player.load(request)
         publish(Upnp.AVT)
         emit()
@@ -332,15 +340,17 @@ class DlnaRenderer(
 
     private fun play(rawSpeed: String?): SoapResult {
         val requested = rawSpeed?.trim().orEmpty().ifBlank { "1" }
-        if (requested != "1" && requested != "1.0") return SoapResult.fault(717, "Play speed not supported")
+        if (!PlaybackRates.matchesPhonePlay(requested)) {
+            return SoapResult.fault(717, "Play speed not supported")
+        }
         val hasMedia = synchronized(lock) { uri.isNotBlank() }
         if (!hasMedia) return SoapResult.fault(701, "Transition not available")
         synchronized(lock) {
             desired = DesiredTransport.PLAYING
             naturalEnd = false
+            replaceHold = false
             transportStatus = "OK"
             errorText = null
-            speed = "1"
         }
         player.play()
         publish(Upnp.AVT)
@@ -366,9 +376,11 @@ class DlnaRenderer(
         synchronized(lock) {
             desired = DesiredTransport.STOPPED
             naturalEnd = false
+            replaceHold = false
             transportStatus = "OK"
             speed = "1"
         }
+        player.setSpeed(1f)
         player.stop()
         publish(Upnp.AVT)
         emit()
@@ -510,6 +522,7 @@ class DlnaRenderer(
             errorText != null -> true
             naturalEnd -> true
             desired == DesiredTransport.PLAYING || desired == DesiredTransport.PAUSED -> true
+            replaceHold -> true
             else -> false
         }
         return SessionSnapshot(
@@ -527,7 +540,33 @@ class DlnaRenderer(
             quality = engine.quality.ifBlank { lastQuality },
             playing = state == "PLAYING" || state == "TRANSITIONING",
             session = session,
+            speed = speed,
         )
+    }
+
+    /** True when the current item is already on screen. Call only while holding [lock]. */
+    private fun showingLocked(): Boolean {
+        if (uri.isBlank()) return false
+        return errorText != null || naturalEnd || replaceHold ||
+            desired == DesiredTransport.PLAYING || desired == DesiredTransport.PAUSED
+    }
+
+    /** Local speed menu. Does not accept arbitrary phone Play speeds. */
+    fun setLocalSpeed(rate: Double): Boolean {
+        val label = PlaybackRates.label(rate) ?: return false
+        val ready = synchronized(lock) {
+            if (uri.isBlank()) {
+                false
+            } else {
+                speed = label
+                true
+            }
+        }
+        if (!ready) return false
+        player.setSpeed(rate.toFloat())
+        publish(Upnp.AVT)
+        emit()
+        return true
     }
 
     private fun avLastChange(engine: PlaybackSnapshot): String {

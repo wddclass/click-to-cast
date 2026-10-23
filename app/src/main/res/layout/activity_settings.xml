@@ -104,6 +104,30 @@
             </LinearLayout>
 
             <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                android:text="@string/overlay_settings_title"
+                android:textColor="@color/muted"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/overlay_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/overlay_off"
+                android:textColor="@color/source"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/overlay_grant"
+                style="@style/Pill"
+                android:layout_marginTop="12dp"
+                android:text="@string/overlay_open"
+                android:textSize="16sp" />
+
+            <TextView
                 android:id="@+id/save"
                 style="@style/Pill"
                 android:layout_marginTop="32dp"

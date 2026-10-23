@@ -17,6 +17,7 @@ class CastConnection(private val activity: Activity) {
     private var bound = false
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            if (!bound) return
             val boundApi = service as? CastReceiverService.Api ?: return
             api = boundApi
             ready?.invoke(boundApi)
@@ -35,9 +36,10 @@ class CastConnection(private val activity: Activity) {
     }
 
     fun unbind() {
+        ready = null
         if (!bound) return
-        runCatching { activity.unbindService(connection) }
         bound = false
+        runCatching { activity.unbindService(connection) }
         api = null
     }
 }

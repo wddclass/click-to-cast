@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.media3.exoplayer.ExoPlayer
 import com.wddclass.clicktocast.BuildConfig
@@ -57,6 +58,7 @@ data class UiState(
     val volume: Int = 40,
     val session: Long = 0,
     val quality: String = "",
+    val speed: String = "1",
 )
 
 class CastReceiverService : Service() {
@@ -68,7 +70,10 @@ class CastReceiverService : Service() {
         fun stopPlayback()
         fun togglePlay()
         fun seekBy(deltaMs: Long)
+        fun seekTo(positionMs: Long)
+        fun setSpeed(rate: Float): Boolean
         fun adjustVolume(deltaPercent: Int)
+        fun notePlayerVisible(visible: Boolean)
         fun history(): List<CastRecord>
         fun clearHistory()
         fun replay(record: CastRecord): Boolean
@@ -92,12 +97,17 @@ class CastReceiverService : Service() {
     private var hostAddress = ""
     private var latest = UiState()
     private var playerOnTop = false
+    private var launchedSession = -1L
+    private var announcedError: String? = null
     private var recordedSession = 0L
+    private var appliedIndex = -1
+    private var appliedMuted = false
 
     private val ticker = object : Runnable {
         override fun run() {
             refreshAddress()
-            main.postDelayed(this, 5_000)
+            syncSystemVolume()
+            main.postDelayed(this, 1_000)
         }
     }
 
@@ -124,6 +134,8 @@ class CastReceiverService : Service() {
         ) { snap -> main.post { onSession(snap) } }
         renderer.volumeApplier = { percent, muted -> main.post { applyVolume(percent, muted) } }
         val (percent, muted) = readVolume()
+        appliedIndex = audio?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: -1
+        appliedMuted = muted
         renderer.adoptVolume(percent, muted, echo = false)
         val airplay = AirPlayHandler({ airplayIdentity() }, RendererAirPlaySink(renderer))
         http = MiniHttpServer { request ->
@@ -192,13 +204,84 @@ class CastReceiverService : Service() {
         promote(text)
         listeners.forEach { listener -> listener(state) }
         record(snap)
-        if (state.showPlayer && !playerOnTop) {
-            playerOnTop = true
-            startActivity(
-                Intent(this, PlayerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
+        maybeOpenPlayer(state)
+    }
+
+    private fun maybeOpenPlayer(state: UiState) {
+        if (!state.showPlayer) {
+            playerOnTop = false
+            launchedSession = -1L
+            announcedError = null
+            cancelArrival()
+            return
         }
-        if (!state.showPlayer) playerOnTop = false
+        if (playerOnTop) return
+        val newSession = state.session != launchedSession
+        val newError = !state.error.isNullOrBlank() && state.error != announcedError
+        if (!newSession && !newError) return
+        launchedSession = state.session
+        announcedError = state.error
+        openPlayer(state.title.ifBlank { getString(R.string.opening) })
+    }
+
+    private fun openPlayer(title: String) {
+        val overlays = canDrawOverlays()
+        DmrLog.i("open player overlay=$overlays title=$title")
+        val intent = playerIntent()
+        try {
+            startActivity(intent)
+        } catch (error: Exception) {
+            DmrLog.i("open player failed: ${error.javaClass.simpleName}")
+        }
+        postArrival(title, intent)
+    }
+
+    private fun playerIntent(): Intent = Intent(this, PlayerActivity::class.java).addFlags(
+        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+    )
+
+    private fun canDrawOverlays(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        return Settings.canDrawOverlays(this)
+    }
+
+    private fun postArrival(title: String, intent: Intent) {
+        ensureChannel()
+        val pending = PendingIntent.getActivity(
+            this,
+            ARRIVAL_REQUEST,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = NotificationCompat.Builder(this, ARRIVAL_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(getString(R.string.notif_arrival, title))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setFullScreenIntent(pending, true)
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(ARRIVAL_ID, notification)
+    }
+
+    private fun cancelArrival() {
+        getSystemService(NotificationManager::class.java).cancel(ARRIVAL_ID)
+    }
+
+    private fun syncSystemVolume() {
+        val manager = audio ?: return
+        if (!::renderer.isInitialized) return
+        val index = manager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val muted = manager.isStreamMute(AudioManager.STREAM_MUSIC)
+        if (index == appliedIndex && muted == appliedMuted) return
+        appliedIndex = index
+        appliedMuted = muted
+        val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val percent = (index * 100f / max).roundToInt().coerceIn(0, 100)
+        renderer.adoptVolume(percent, muted, echo = false)
     }
 
     private fun toUi(snap: SessionSnapshot): UiState {
@@ -220,6 +303,7 @@ class CastReceiverService : Service() {
             volume = snap.volume,
             session = snap.session,
             quality = snap.quality,
+            speed = snap.speed,
         )
     }
 
@@ -257,6 +341,8 @@ class CastReceiverService : Service() {
         val manager = audio ?: return
         val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         val index = (percent.coerceIn(0, 100) / 100f * max).roundToInt().coerceIn(0, max)
+        appliedIndex = index
+        appliedMuted = muted
         manager.setStreamVolume(AudioManager.STREAM_MUSIC, index, 0)
         val currentlyMuted = manager.isStreamMute(AudioManager.STREAM_MUSIC)
         if (muted && !currentlyMuted) {
@@ -319,6 +405,16 @@ class CastReceiverService : Service() {
         channel.description = getString(R.string.channel_desc)
         channel.setShowBadge(false)
         manager.createNotificationChannel(channel)
+        val arrival = NotificationChannel(
+            ARRIVAL_CHANNEL,
+            getString(R.string.arrival_channel_name),
+            NotificationManager.IMPORTANCE_HIGH,
+        )
+        arrival.description = getString(R.string.arrival_channel_desc)
+        arrival.setSound(null, null)
+        arrival.enableVibration(false)
+        arrival.setShowBadge(false)
+        manager.createNotificationChannel(arrival)
     }
 
     private fun buildNotification(text: String): Notification {
@@ -381,6 +477,21 @@ class CastReceiverService : Service() {
             playerBackend.seekTo(next)
         }
 
+        override fun seekTo(positionMs: Long) {
+            if (!::playerBackend.isInitialized) return
+            playerBackend.seekTo(positionMs)
+        }
+
+        override fun setSpeed(rate: Float): Boolean {
+            if (!::renderer.isInitialized) return false
+            return renderer.setLocalSpeed(rate.toDouble())
+        }
+
+        override fun notePlayerVisible(visible: Boolean) {
+            playerOnTop = visible
+            if (visible) cancelArrival()
+        }
+
         override fun adjustVolume(deltaPercent: Int) {
             if (!::renderer.isInitialized) return
             val current = renderer.snapshot()
@@ -408,6 +519,9 @@ class CastReceiverService : Service() {
     companion object {
         private const val TAG = "ClickToCast"
         private const val CHANNEL = "cast_receiver"
+        private const val ARRIVAL_CHANNEL = "cast_arrival"
         private const val NOTIF_ID = 7
+        private const val ARRIVAL_ID = 8
+        private const val ARRIVAL_REQUEST = 3
     }
 }
