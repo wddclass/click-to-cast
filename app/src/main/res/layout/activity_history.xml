@@ -30,10 +30,12 @@
         android:layout_marginTop="84dp"
         android:layout_marginEnd="48dp"
         android:layout_marginBottom="96dp"
+        android:choiceMode="singleChoice"
         android:clipToPadding="false"
         android:divider="@android:color/transparent"
         android:dividerHeight="10dp"
         android:listSelector="@android:color/transparent"
+        android:padding="6dp"
         android:scrollbars="none" />
 
     <TextView

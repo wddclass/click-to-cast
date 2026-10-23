@@ -53,7 +53,8 @@ export ANDROID_HOME=...
 
 ## 已知限制
 
-- DLNA / UPnP 之外，另有 AirPlay 视频地址播放：mDNS 宣告 `_airplay._tcp` 和 `_raop._tcp`，手机把视频 URL POST 到 `/play` 后由同一播放器开播。iOS 控制中心的屏幕镜像走 AirPlay 2 / FairPlay，这一版不解密，所以镜像选中后不会出画面。RAOP 只做发现，不传 RTP 音频。
+- DLNA / UPnP 之外，另有 AirPlay 视频地址播放。应用在每块 IPv4 网卡上直接向 `224.0.0.251:5353` 宣告 `_airplay._tcp` 和 `_raop._tcp`（TTL 255），并回答同网段的 mDNS 查询。IP 变化或改名后会先发 TTL 0 的 goodbye，再按新地址重新宣告。`GET /info` 和 `GET /server-info` 返回同一份设备信息。手机把视频 URL POST 到 `/play` 后由同一播放器开播。
+- iPhone 控制中心能不能列出「投屏点我」，取决于系统会不会接受一台没有完成 HAP pair-setup / pair-verify 的接收端。这两步不是 FairPlay，但这一版不做配对握手；`/pair-setup`、`/pair-verify`、`/pair-add` 会记一条日志并返回 501。屏幕镜像仍然需要 FairPlay，选中后不会出画面。RAOP 只做发现，不传 RTP 音频。同一局域网里可以用 `dns-sd -B _airplay._tcp` 或 `avahi-browse -r _airplay._tcp` 确认宣告是否发出；logcat 标签 `ClickToCast` 会看到 `airplay mdns announce`。
 - Miracast、Chromecast、乐播 / 乐联私有协议仍未实现。
 - 爱奇艺、优酷、腾讯视频、Bilibili 的部分版本只走私有协议，或者地址带短时签名和 DRM。它们走标准 DLNA 时可以被发现；走私有协议时列表里不会出现本应用，或者给出地址后无法播放。
 - 不转码。编码、封装或 DRM 电视硬解不了，就会直接失败。
@@ -64,7 +65,8 @@ export ANDROID_HOME=...
 - 雷鸟 Android 11 上，第一笔 HTTP 请求会调用仅 API 33 才有的 `ByteArrayOutputStream.toString(Charset)`，进程因此退出。请求行已改为 `String(bytes, charset)`，HTTP 工作线程按连接捕获 `Throwable`。
 - 空的 `CurrentURIMetaData`、`NOT_IMPLEMENTED`、未转义的 DIDL，以及 `Expect: 100-continue` / chunked 请求都按可选元数据处理。发现应答覆盖 `ssdp:all`，并在每块 IPv4 网卡上以 TTL 2 发送 3 次 NOTIFY。IPv6 链路组播同样宣告。M-SEARCH 的单播回复从绑定 1900 的套接字发回发送方的 ip:port，随机延迟不超过 800ms。设备描述带 `presentationURL`、PNG 图标、`dlna:X_DLNADOC`（DMR-1.50）和 `dlna:X_DLNACAP`。`SERVER` 使用逗号分隔，和 Platinum / redsonic 一样。出厂名仍是「投屏点我」，和电视自带的 redsonic / hpplay 分开。
 - 每次 M-SEARCH（来源 ip:port、ST）和每条回复都会打在 logcat 标签 `ClickToCast` 下。
-- 发现、起播、暂停、seek、4K/HDR 和长时间播放仍未在雷鸟鹏 6 SE 上验收。
+- 雷鸟鹏 6 SE（Android 11）上，versionCode 2 已经能被 Bilibili 通过 SSDP 发现，并且 `SetAVTransportURI` / `Play` / `Pause` / `Seek` 返回 HTTP 200。AirPlay 宣告、控制中心列表、设置页光晕和投屏记录重播还要在装上更新的包之后再看。4K/HDR 和长时间播放仍未在这台电视上验收。
+- 投屏记录里，带 http(s) 地址的新记录可以用遥控器选中后按 OK 重播，请求头只用当时存下来的那些。更早的记录没有地址，行内会写「不能重播，没有保存播放地址」。
 
 ## 协议说明
 

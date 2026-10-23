@@ -25,13 +25,9 @@ object Pills {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 view.defaultFocusHighlightEnabled = false
             }
-            view.setOnFocusChangeListener { target, focused ->
-                target.animate()
-                    .scaleX(if (focused) 1.06f else 1f)
-                    .scaleY(if (focused) 1.06f else 1f)
-                    .setDuration(140)
-                    .start()
-            }
+            // Scaling on focus draws outside the chip and ScrollView clips the left edge.
+            view.scaleX = 1f
+            view.scaleY = 1f
         }
     }
 }

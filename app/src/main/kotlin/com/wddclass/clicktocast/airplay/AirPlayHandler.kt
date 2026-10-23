@@ -62,8 +62,10 @@ class AirPlayHandler(
     }
 
     private fun dispatch(request: HttpRequest): HttpResponse? = when (request.path) {
+        "/info" -> if (request.method == "GET") info() else null
         "/server-info" -> if (request.method == "GET") xml(AirPlayTexts.serverInfo(identity().deviceId)) else null
         "/playback-info" -> if (request.method == "GET") xml(AirPlayTexts.playbackInfo(sink.status())) else null
+        "/pair-setup", "/pair-verify", "/pair-add" -> refuse(request)
         "/play" -> if (request.method == "POST") play(request) else null
         "/stop" -> if (request.method == "POST" || request.method == "GET") stop() else null
         "/rate" -> if (request.method == "POST" || request.method == "GET") rate(request) else null
@@ -107,6 +109,18 @@ class AirPlayHandler(
             return empty(200, "OK")
         }
         return text(200, "OK", AirPlayTexts.scrubText(sink.status()), "text/parameters")
+    }
+
+    private fun info(): HttpResponse {
+        val who = identity()
+        return xml(AirPlayTexts.info(who.name, who.deviceId))
+    }
+
+    private fun refuse(request: HttpRequest): HttpResponse {
+        DmrLog.i(
+            "airplay ${request.path} from ${request.remoteIp} refused; pairing and FairPlay mirroring are not implemented",
+        )
+        return empty(501, "Not Implemented")
     }
 
     private fun reverse(request: HttpRequest): HttpResponse {

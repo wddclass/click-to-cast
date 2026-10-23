@@ -11,9 +11,19 @@ data class CastRecord(
     val quality: String,
     val outcome: String,
     val session: Long,
-)
+    val uri: String = "",
+    val userAgent: String = "",
+    val headers: Map<String, String> = emptyMap(),
+) {
+    /** True when this entry still has the address that was playing. */
+    val canReplay: Boolean
+        get() = uri.startsWith("http://") || uri.startsWith("https://")
+}
 
-/** Local cast list. Titles and source labels only — media URLs are not stored. */
+/**
+ * Local cast list. New rows keep the http(s) URL and the headers used to fetch it
+ * so OK can replay them. Rows saved by older builds have no URL and cannot be replayed.
+ */
 class CastHistory(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -24,6 +34,15 @@ class CastHistory(context: Context) {
             buildList {
                 for (index in 0 until array.length()) {
                     val item = array.getJSONObject(index)
+                    val headers = linkedMapOf<String, String>()
+                    val headerJson = item.optJSONObject("headers")
+                    if (headerJson != null) {
+                        val keys = headerJson.keys()
+                        while (keys.hasNext()) {
+                            val key = keys.next()
+                            headers[key] = headerJson.optString(key)
+                        }
+                    }
                     add(
                         CastRecord(
                             at = item.optLong("at"),
@@ -32,6 +51,9 @@ class CastHistory(context: Context) {
                             quality = item.optString("quality"),
                             outcome = item.optString("outcome"),
                             session = item.optLong("session"),
+                            uri = item.optString("uri"),
+                            userAgent = item.optString("ua"),
+                            headers = headers,
                         ),
                     )
                 }
@@ -68,6 +90,12 @@ class CastHistory(context: Context) {
     private fun write(records: List<CastRecord>) {
         val array = JSONArray()
         records.forEach { record ->
+            val headerJson = JSONObject()
+            record.headers.entries.take(12).forEach { (key, value) ->
+                if (key.isNotBlank() && value.isNotBlank()) {
+                    headerJson.put(key.take(80), value.take(300))
+                }
+            }
             array.put(
                 JSONObject()
                     .put("at", record.at)
@@ -75,7 +103,10 @@ class CastHistory(context: Context) {
                     .put("source", record.source)
                     .put("quality", record.quality)
                     .put("outcome", record.outcome)
-                    .put("session", record.session),
+                    .put("session", record.session)
+                    .put("uri", record.uri.take(4000))
+                    .put("ua", record.userAgent.take(300))
+                    .put("headers", headerJson),
             )
         }
         prefs.edit().putString(KEY, array.toString()).apply()

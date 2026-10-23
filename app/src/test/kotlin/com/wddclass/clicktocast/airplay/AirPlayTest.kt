@@ -104,6 +104,91 @@ class AirPlayTest {
         val server = handler.handle(HttpRequest("GET", "/server-info", emptyMap(), ByteArray(0), "10.0.0.8"))
         assertEquals("text/x-apple-plist+xml", server?.headers?.get("Content-Type"))
         assertTrue(String(server!!.body).contains("12:11:11:22:22:33"))
+
+        val deviceInfo = handler.handle(HttpRequest("GET", "/info", emptyMap(), ByteArray(0), "10.0.0.9"))
+        assertEquals(200, deviceInfo?.status)
+        val plist = String(deviceInfo!!.body)
+        assertTrue(plist.contains("12:11:11:22:22:33"))
+        assertTrue(plist.contains("投屏点我"))
+        assertTrue(plist.contains("<key>features</key><integer>1515847927</integer>"))
+
+        val denied = handler.handle(HttpRequest("POST", "/pair-setup", emptyMap(), byteArrayOf(1), "10.0.0.9"))
+        assertEquals(501, denied?.status)
+        val verify = handler.handle(HttpRequest("POST", "/pair-verify", emptyMap(), byteArrayOf(1), "10.0.0.9"))
+        assertEquals(501, verify?.status)
+    }
+
+    @Test
+    fun mdnsAnnounceAnswersAndGoodbye() {
+        val ad = Mdns.advertisement("投屏点我", "AA:BB:CC:DD:EE:FF", 8192, "192.168.123.2")
+        val packets = Mdns.announce(ad)
+        assertEquals(2, packets.size)
+        val airplay = packets[0]
+        assertTrue(String(airplay, Charsets.ISO_8859_1).contains("_airplay"))
+        assertTrue(indexOf(airplay, byteArrayOf(192.toByte(), 168.toByte(), 123, 2)) >= 0)
+        assertTrue(indexOf(airplay, byteArrayOf(0x20, 0x00)) >= 0)
+        val liveTtls = Mdns.recordTtls(airplay)
+        assertTrue(liveTtls.isNotEmpty())
+        assertTrue(liveTtls.any { it > 0L })
+
+        val gone = Mdns.announce(ad, goodbye = true)
+        assertTrue(gone.all { packet ->
+            val ttls = Mdns.recordTtls(packet)
+            ttls.isNotEmpty() && ttls.all { it == 0L }
+        })
+
+        val query = Mdns.query(0x1234, "_airplay._tcp.local")
+        val reply = Mdns.response(query, ad)
+        assertEquals(0x12, reply!![0].toInt() and 0xFF)
+        assertEquals(0x34, reply[1].toInt() and 0xFF)
+        assertEquals(0x84, reply[2].toInt() and 0xFF)
+        assertTrue(String(reply, Charsets.ISO_8859_1).contains("_airplay"))
+        assertNull(Mdns.response(Mdns.query(7, "_googlecast._tcp.local"), ad))
+        assertNull(Mdns.response(airplay, ad))
+
+        val compressed = compressedQuery(0x0A0B)
+        val compressedReply = Mdns.response(compressed, ad)
+        assertEquals(0x0A, compressedReply!![0].toInt() and 0xFF)
+        assertEquals(0x0B, compressedReply[1].toInt() and 0xFF)
+        assertEquals(0x84, compressedReply[2].toInt() and 0xFF)
+        assertEquals(listOf("_airplay._tcp.local"), Mdns.questionNames(compressed))
+    }
+
+    private fun compressedQuery(id: Int): ByteArray {
+        val name = byteArrayOf(
+            8, '_'.code.toByte(), 'a'.code.toByte(), 'i'.code.toByte(), 'r'.code.toByte(),
+            'p'.code.toByte(), 'l'.code.toByte(), 'a'.code.toByte(), 'y'.code.toByte(),
+            4, '_'.code.toByte(), 't'.code.toByte(), 'c'.code.toByte(), 'p'.code.toByte(),
+            5, 'l'.code.toByte(), 'o'.code.toByte(), 'c'.code.toByte(), 'a'.code.toByte(), 'l'.code.toByte(),
+            0,
+        )
+        val packet = ByteArray(18 + name.size)
+        packet[0] = (id ushr 8).toByte()
+        packet[1] = id.toByte()
+        packet[5] = 1
+        packet[12] = 0xC0.toByte()
+        packet[13] = 0x12
+        packet[14] = 0x00
+        packet[15] = 12
+        packet[16] = 0x00
+        packet[17] = 1
+        name.copyInto(packet, 18)
+        return packet
+    }
+
+    private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
+        if (needle.isEmpty() || needle.size > haystack.size) return -1
+        for (start in 0..haystack.size - needle.size) {
+            var same = true
+            for (offset in needle.indices) {
+                if (haystack[start + offset] != needle[offset]) {
+                    same = false
+                    break
+                }
+            }
+            if (same) return start
+        }
+        return -1
     }
 
     private class FakeSink : AirPlaySink {

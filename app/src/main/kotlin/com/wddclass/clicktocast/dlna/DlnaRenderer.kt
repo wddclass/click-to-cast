@@ -183,6 +183,47 @@ class DlnaRenderer(
         if (stateChanged || qualityChanged) emit()
     }
 
+    fun replaySource(): Triple<String, String, Map<String, String>> = synchronized(lock) {
+        Triple(uri, activeUserAgent, headers)
+    }
+
+    /** Play a URL kept in local history. Headers are only those saved with the entry. */
+    fun replayMedia(url: String, title: String, agent: String, extra: Map<String, String>): Boolean {
+        val trimmed = url.trim()
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return false
+        val resolvedTitle = title.trim().ifBlank { CastMetadata.safeTitle("", trimmed) }
+        val resolvedAgent = agent.ifBlank { userAgent() }
+        val request = PlaybackRequest(
+            uri = trimmed,
+            title = resolvedTitle,
+            mimeHint = null,
+            userAgent = resolvedAgent,
+            headers = extra,
+            startPositionMs = 0L,
+        )
+        synchronized(lock) {
+            uri = trimmed
+            metadata = ""
+            this.title = resolvedTitle
+            sourceLine = "来自 投屏记录"
+            mimeHint = null
+            headers = extra
+            activeUserAgent = resolvedAgent
+            session += 1
+            desired = DesiredTransport.STOPPED
+            naturalEnd = false
+            transportStatus = "OK"
+            errorText = null
+            speed = "1"
+            pendingFraction = 0.0
+        }
+        DmrLog.i("replay ${redactUrl(trimmed)} title=$resolvedTitle")
+        player.load(request)
+        publish(Upnp.AVT)
+        emit()
+        return play("1").httpStatus == 200
+    }
+
     /** AirPlay POST /play. Loads the URL and starts playback. [startFraction] is 0..1. */
     fun castUrl(url: String, userAgent: String, startFraction: Double): Boolean {
         if (setUri(url, "", userAgent).httpStatus != 200) return false

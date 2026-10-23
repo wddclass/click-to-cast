@@ -94,6 +94,23 @@ object AirPlayTexts {
         return "$mac@$kept"
     }
 
+    /** What iOS reads from GET /info before it keeps a receiver in Control Center. */
+    fun info(name: String, deviceId: String): String = plist(
+        """
+        <key>deviceid</key><string>${escape(deviceId)}</string>
+        <key>features</key><integer>1515847927</integer>
+        <key>model</key><string>$MODEL</string>
+        <key>protovers</key><string>1.0</string>
+        <key>srcvers</key><string>$SRCVERS</string>
+        <key>sourceVersion</key><string>$SRCVERS</string>
+        <key>vv</key><integer>2</integer>
+        <key>statusFlags</key><integer>4</integer>
+        <key>name</key><string>${escape(name)}</string>
+        <key>pk</key><string>$PUBLIC_KEY</string>
+        <key>pi</key><string>${escape(pi(deviceId))}</string>
+        """.trimIndent(),
+    )
+
     fun serverInfo(deviceId: String): String = plist(
         """
         <key>deviceid</key><string>${escape(deviceId)}</string>

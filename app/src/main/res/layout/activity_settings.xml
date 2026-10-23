@@ -6,9 +6,10 @@
     android:clipChildren="false">
 
     <View
-        android:layout_width="640dp"
-        android:layout_height="320dp"
+        android:layout_width="980dp"
+        android:layout_height="640dp"
         android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="-80dp"
         android:background="@drawable/bg_glow" />
 
     <TextView
@@ -25,8 +26,11 @@
         android:layout_height="match_parent"
         android:layout_gravity="center_horizontal"
         android:clipChildren="false"
+        android:clipToPadding="false"
         android:fillViewport="true"
+        android:paddingStart="16dp"
         android:paddingTop="88dp"
+        android:paddingEnd="16dp"
         android:paddingBottom="36dp">
 
         <LinearLayout
@@ -78,7 +82,12 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:clipChildren="false"
-                android:orientation="horizontal">
+                android:clipToPadding="false"
+                android:orientation="horizontal"
+                android:paddingStart="8dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="4dp">
 
                 <TextView
                     android:id="@+id/ua_browser"

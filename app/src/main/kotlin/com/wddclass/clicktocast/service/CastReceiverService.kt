@@ -71,6 +71,7 @@ class CastReceiverService : Service() {
         fun adjustVolume(deltaPercent: Int)
         fun history(): List<CastRecord>
         fun clearHistory()
+        fun replay(record: CastRecord): Boolean
         fun shutdown()
     }
 
@@ -132,7 +133,7 @@ class CastReceiverService : Service() {
         httpPort = http.start(Upnp.PREFERRED_PORT)
         ssdp = SsdpAdvertiser(profileProvider = { currentProfile() }, configId = { configId })
         ssdp.start()
-        airplayMdns = AirPlayAdvertiser(this, { httpPort }, { airplayIdentity() })
+        airplayMdns = AirPlayAdvertiser({ httpPort }, { airplayIdentity() })
         airplayMdns.start()
         refreshAddress()
         main.post(ticker)
@@ -176,6 +177,7 @@ class CastReceiverService : Service() {
         if (next == hostAddress) return
         hostAddress = next
         if (::ssdp.isInitialized) ssdp.announceSoon()
+        if (::airplayMdns.isInitialized) airplayMdns.refresh()
         if (::renderer.isInitialized) onSession(renderer.snapshot())
     }
 
@@ -232,6 +234,7 @@ class CastReceiverService : Service() {
         }
         if (snap.session != recordedSession) {
             recordedSession = snap.session
+            val (uri, agent, headers) = renderer.replaySource()
             historyStore.add(
                 CastRecord(
                     at = System.currentTimeMillis(),
@@ -240,6 +243,9 @@ class CastReceiverService : Service() {
                     quality = snap.quality,
                     outcome = outcome,
                     session = snap.session,
+                    uri = uri,
+                    userAgent = agent,
+                    headers = headers,
                 ),
             )
         } else {
@@ -349,7 +355,7 @@ class CastReceiverService : Service() {
             settings.browserUserAgent = browserUserAgent
             configId += 1
             if (::ssdp.isInitialized) ssdp.announceSoon()
-            if (::airplayMdns.isInitialized) airplayMdns.start()
+            if (::airplayMdns.isInitialized) airplayMdns.refresh()
             if (::renderer.isInitialized) onSession(renderer.snapshot())
         }
 
@@ -384,6 +390,11 @@ class CastReceiverService : Service() {
         override fun history(): List<CastRecord> = historyStore.list()
 
         override fun clearHistory() = historyStore.clear()
+
+        override fun replay(record: CastRecord): Boolean {
+            if (!record.canReplay || !::renderer.isInitialized) return false
+            return renderer.replayMedia(record.uri, record.title, record.userAgent, record.headers)
+        }
 
         override fun shutdown() {
             if (::airplayMdns.isInitialized) airplayMdns.stop()

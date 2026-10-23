@@ -5,9 +5,10 @@
     android:background="@color/bg">
 
     <View
-        android:layout_width="640dp"
-        android:layout_height="320dp"
+        android:layout_width="980dp"
+        android:layout_height="640dp"
         android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="-80dp"
         android:background="@drawable/bg_glow" />
 
     <LinearLayout
