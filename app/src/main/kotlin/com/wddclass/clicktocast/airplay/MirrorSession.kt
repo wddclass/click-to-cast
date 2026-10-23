@@ -2,7 +2,6 @@ package com.wddclass.clicktocast.airplay
 
 import android.content.Context
 import android.media.MediaCodec
-import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Handler
@@ -17,19 +16,17 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Socket
 import java.nio.ByteBuffer
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 /**
  * One AirPlay screen mirror: FairPlay-unwrapped AES-CTR video into MediaCodec,
- * NTP timing towards the phone, and a best-effort AAC/AAC-ELD audio stream.
+ * NTP timing towards the phone, and AAC-ELD / AAC-LC mirror audio.
  */
 class MirrorSession(
     context: Context,
     private val openActivity: () -> Unit,
 ) {
     private val appContext = context.applicationContext
+    private val audioPlayer = MirrorAudioPlayer(appContext, { alive }, { sessionToken }, { presentedAt })
     private val decodeThread = HandlerThread("airplay-decode")
     private val decode: Handler
     private val gate = Any()
@@ -46,17 +43,12 @@ class MirrorSession(
     private var timingThread: Thread? = null
     private var timingLogs = 0
     private var videoLogs = 0
-    private var audioLogs = 0
     private var opened = false
     private var presented = false
+    @Volatile private var presentedAt = 0L
 
     @Volatile private var videoCipher: MirrorCtr? = null
     private var videoCodec: MediaCodec? = null
-    private var audioCodec: MediaCodec? = null
-    private var audioKey: ByteArray? = null
-    private var audioIv: ByteArray? = null
-    private var audioCt = 0
-    private var audioFailed = false
     private var surface: Surface? = null
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
@@ -190,12 +182,15 @@ class MirrorSession(
 
     fun armAudio(rawKey: ByteArray, ecdhSecret: ByteArray?, eiv: ByteArray?, ct: Int) {
         val mixed = MirrorKeys.mixWithEcdh(rawKey, ecdhSecret)
-        audioKey = mixed
-        audioIv = eiv?.copyOf(16)
-        audioCt = ct
-        audioFailed = false
-        DmrLog.i("airplay mirror audio ct=$ct eiv=${eiv?.size ?: 0} keyPrefix=${AirPlayKeys.hex(mixed).take(8)}")
-        decode.post { startAudioCodec() }
+        audioPlayer.start(sessionToken, mixed, eiv, ct)
+    }
+
+    fun flushAudio() {
+        audioPlayer.flush()
+    }
+
+    fun setVolumeDb(db: Float) {
+        audioPlayer.setVolumeDb(db)
     }
 
     fun fail(message: String) {
@@ -397,11 +392,11 @@ class MirrorSession(
     }
 
     fun onAudioDatagram(packet: ByteArray) {
-        audioLogs++
-        if (audioLogs <= 3 || audioLogs % 200 == 0) {
-            DmrLog.i("airplay audio datagram bytes=${packet.size} hex=${AirPlayKeys.hexPrefix(packet, 8)}")
-        }
-        decode.post { onAudio(packet) }
+        audioPlayer.offer(packet)
+    }
+
+    fun onAudioControl(packet: ByteArray) {
+        audioPlayer.control(packet)
     }
 
     fun stop(reason: String) {
@@ -416,6 +411,7 @@ class MirrorSession(
         timingRunning = false
         timingThread?.interrupt()
         timingThread = null
+        audioPlayer.stop()
         opened = false
         DmrLog.i("airplay mirror stop reason=$reason")
         try {
@@ -424,7 +420,6 @@ class MirrorSession(
         }
         decode.post {
             releaseVideoCodec()
-            releaseAudioCodec()
             videoCipher = null
             sps = null
             pps = null
@@ -638,64 +633,6 @@ class MirrorSession(
         }
     }
 
-    private fun startAudioCodec() {
-        if (audioFailed || audioCodec != null) return
-        if (audioCt != 4 && audioCt != 8) {
-            DmrLog.i("airplay audio ct=$audioCt left on the UDP port (AAC-ELD is ct 8, AAC-LC is ct 4)")
-            return
-        }
-        try {
-            val sampleRate = 44_100
-            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 2)
-            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4_096)
-            format.setInteger(MediaFormat.KEY_IS_ADTS, 0)
-            if (audioCt == 8) {
-                if (Build.VERSION.SDK_INT < 28) {
-                    DmrLog.i("airplay audio AAC-ELD needs API 28; video continues")
-                    return
-                }
-                format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectELD)
-                format.setByteBuffer("csd-0", ByteBuffer.wrap(byteArrayOf(0xF8.toByte(), 0xE8.toByte(), 0x50, 0x00)))
-            } else {
-                format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-                format.setByteBuffer("csd-0", ByteBuffer.wrap(byteArrayOf(0x12, 0x10)))
-            }
-            val decoder = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
-            decoder.configure(format, null, null, 0)
-            decoder.start()
-            audioCodec = decoder
-            DmrLog.i("airplay audio decoder started ct=$audioCt")
-        } catch (error: Throwable) {
-            audioFailed = true
-            DmrLog.i("airplay audio decoder failed: ${error.javaClass.simpleName} ${error.message}")
-        }
-    }
-
-    private fun onAudio(packet: ByteArray) {
-        if (!alive || audioFailed) return
-        val key = audioKey ?: return
-        val iv = audioIv ?: return
-        if (packet.size < 12 || ((packet[0].toInt() ushr 6) and 3) != 2) return
-        val header = rtpHeaderLength(packet) ?: return
-        if (header >= packet.size) return
-        val payload = packet.copyOfRange(header, packet.size)
-        val plain = decryptCbc(key, iv, payload) ?: return
-        val decoder = audioCodec ?: return
-        try {
-            val index = decoder.dequeueInputBuffer(2_000)
-            if (index < 0) return
-            val buffer = decoder.getInputBuffer(index) ?: return
-            buffer.clear()
-            if (plain.size > buffer.capacity()) return
-            buffer.put(plain)
-            decoder.queueInputBuffer(index, 0, plain.size, System.nanoTime() / 1000L, 0)
-            drain(decoder, video = false)
-        } catch (error: Throwable) {
-            audioFailed = true
-            DmrLog.i("airplay audio queue failed: ${error.message}")
-        }
-    }
-
     private fun drain(decoder: MediaCodec, video: Boolean) {
         val info = MediaCodec.BufferInfo()
         while (alive) {
@@ -719,6 +656,7 @@ class MirrorSession(
                     }
                     if (render && !presented) {
                         presented = true
+                        presentedAt = System.nanoTime()
                         DmrLog.i("airplay mirror first frame")
                         statusView?.post { statusView?.visibility = View.GONE }
                         onPresented?.invoke()
@@ -780,44 +718,6 @@ class MirrorSession(
         try {
             decoder.release()
         } catch (_: Throwable) {
-        }
-    }
-
-    private fun releaseAudioCodec() {
-        val decoder = audioCodec ?: return
-        audioCodec = null
-        try {
-            decoder.stop()
-        } catch (_: Throwable) {
-        }
-        try {
-            decoder.release()
-        } catch (_: Throwable) {
-        }
-    }
-
-    private fun rtpHeaderLength(packet: ByteArray): Int? {
-        val cc = packet[0].toInt() and 0x0F
-        var length = 12 + cc * 4
-        if (length > packet.size) return null
-        if ((packet[0].toInt() and 0x10) != 0) {
-            if (length + 4 > packet.size) return null
-            val words = ((packet[length + 2].toInt() and 0xFF) shl 8) or (packet[length + 3].toInt() and 0xFF)
-            length += 4 + words * 4
-        }
-        return if (length <= packet.size) length else null
-    }
-
-    private fun decryptCbc(key: ByteArray, iv: ByteArray, data: ByteArray): ByteArray? {
-        val length = data.size - data.size % 16
-        if (length <= 0) return null
-        return try {
-            val cipher = Cipher.getInstance("AES/CBC/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key.copyOf(16), "AES"), IvParameterSpec(iv.copyOf(16)))
-            cipher.doFinal(data, 0, length)
-        } catch (error: Throwable) {
-            DmrLog.i("airplay audio decrypt failed: ${error.message}")
-            null
         }
     }
 

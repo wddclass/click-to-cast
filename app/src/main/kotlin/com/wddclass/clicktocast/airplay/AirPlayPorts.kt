@@ -53,6 +53,7 @@ internal class AirPlayPorts(private val mirror: MirrorSession? = null) {
             DmrLog.i(
                 "airplay ports timing=$timingPort data=$dataPort audio=$audioPort audioControl=$audioControlPort",
             )
+            DmrLog.i("airplay audio ports data=$audioPort control=$audioControlPort")
         }
     }
 
@@ -137,9 +138,15 @@ internal class AirPlayPorts(private val mirror: MirrorSession? = null) {
             try {
                 val packet = DatagramPacket(buffer, buffer.size)
                 socket.receive(packet)
-                DmrLog.i(
-                    "airplay audio control ${packet.length} from ${packet.address?.hostAddress}:${packet.port}",
-                )
+                val copy = packet.data.copyOf(packet.length)
+                val session = mirror
+                if (session != null) {
+                    session.onAudioControl(copy)
+                } else {
+                    DmrLog.i(
+                        "airplay audio control ${packet.length} from ${packet.address?.hostAddress}:${packet.port}",
+                    )
+                }
             } catch (error: Throwable) {
                 if (!socket.isClosed) DmrLog.i("airplay audio control failed: ${error.message}")
                 return

@@ -69,6 +69,7 @@ class AirPlayHandler(
     private var sessionIv: ByteArray? = null
     private var sessionPath: String = ""
     private var clientTimingPort: Int = 0
+    private var volumeDb = 0f
     fun handle(request: HttpRequest): HttpResponse? {
         touchMirror(request)
         val response = dispatch(request)
@@ -410,6 +411,11 @@ class AirPlayHandler(
                 96L -> "audio"
                 else -> "other"
             }
+            if (type == 96L) {
+                DmrLog.i(
+                    "airplay audio setup ct=$ct dataPort=$dataPort controlPort=${ports.audioControlPort}",
+                )
+            }
             DmrLog.i("airplay SETUP stream type=$type ($kind) id=$id ct=$ct data=$dataPort")
             onStream(type, id, ct)
             replies += reply
@@ -421,13 +427,34 @@ class AirPlayHandler(
         streams.joinToString(",") { it["type"].toString() }
 
     private fun parameter(request: HttpRequest, read: Boolean): HttpResponse {
-        val text = String(request.body, Charsets.UTF_8).replace('\r', ' ').take(120)
-        DmrLog.i("airplay ${request.method} from ${request.remoteIp} body=$text")
-        if (!read) return empty(200, "OK")
-        if (String(request.body, Charsets.UTF_8).contains("volume")) {
-            return text(200, "OK", "volume: 0.000000\r\n", "text/parameters")
+        val text = String(request.body, Charsets.UTF_8)
+        val shown = text.replace('\r', ' ').take(120)
+        DmrLog.i("airplay ${request.method} from ${request.remoteIp} body=$shown")
+        if (!read) {
+            val db = volumeSetting(request.body, text)
+            if (db != null) {
+                volumeDb = db
+                mirror?.setVolumeDb(db)
+            }
+            return empty(200, "OK")
+        }
+        if (text.contains("volume")) {
+            return text(200, "OK", MirrorAudio.formatVolume(volumeDb), "text/parameters")
         }
         return empty(200, "OK")
+    }
+
+    private fun volumeSetting(body: ByteArray, text: String): Float? {
+        MirrorAudio.volumeDb(text)?.let { return it }
+        val parsed = plistDictionary(body) ?: return null
+        val value = parsed["volume"]
+        val db = when (value) {
+            is Float -> value
+            is Double -> value.toFloat()
+            is Number -> value.toFloat()
+            else -> return null
+        }
+        return db.coerceIn(-144f, 0f)
     }
 
     private fun record(request: HttpRequest): HttpResponse {
@@ -497,6 +524,7 @@ class AirPlayHandler(
     }
 
     private fun rtspSimple(request: HttpRequest, name: String): HttpResponse {
+        if (name == "flush") mirror?.flushAudio()
         DmrLog.i(
             "airplay $name from ${request.remoteIp} bytes=${request.body.size} " +
                 "hex=${AirPlayKeys.hexPrefix(request.body, 16)}",

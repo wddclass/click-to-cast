@@ -46,6 +46,38 @@ class AirPlayTest {
     }
 
     @Test
+    fun setParameterVolumeIsRemembered() {
+        val keys = AirPlayKeys.fromSeed(ByteArray(32) { 9 })
+        val handler = AirPlayHandler(
+            { AirPlayIdentity("投屏点我", "12:11:11:22:22:33", keys.publicKeyHex) },
+            FakeSink(),
+            keys,
+        )
+        val set = handler.handle(
+            HttpRequest(
+                "SET_PARAMETER",
+                "/stream",
+                mapOf("cseq" to "3", "content-type" to "text/parameters"),
+                "volume: -20.000000\r\n".toByteArray(),
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(200, set?.status)
+        val read = handler.handle(
+            HttpRequest(
+                "GET_PARAMETER",
+                "/stream",
+                mapOf("cseq" to "4"),
+                "volume\r\n".toByteArray(),
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals("volume: -20.000000\r\n", String(read!!.body, Charsets.UTF_8))
+    }
+
+    @Test
     fun recordsUseAStableLocallyAdministeredMac() {
         val mac = AirPlayTexts.macFromUuid("11111111-2222-3333-4444-555555555555")
         val first = mac.substring(0, 2).toInt(16)
