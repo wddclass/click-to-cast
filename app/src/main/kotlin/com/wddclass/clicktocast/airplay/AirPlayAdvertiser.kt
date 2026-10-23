@@ -119,7 +119,9 @@ class AirPlayAdvertiser(
                         deliver(v4, nics, previous, goodbye = true)
                         if (v6 != null) deliverV6(v6, v6nics, previous, goodbye = true)
                     }
-                    val ads = nics.map { nic -> Mdns.advertisement(who.name, who.deviceId, listen, nic.ipv4) }
+                    val ads = nics.map { nic ->
+                        Mdns.advertisement(who.name, who.deviceId, listen, nic.ipv4, who.publicKeyHex)
+                    }
                     deliver(v4, nics, ads, goodbye = false)
                     if (v6 != null) deliverV6(v6, v6nics, ads, goodbye = false)
                     previous = ads
@@ -170,7 +172,7 @@ class AirPlayAdvertiser(
         val data = packet.data.copyOf(packet.length)
         val peer = SsdpReply.ipv4Literal(packet.address) ?: packet.address?.hostAddress.orEmpty()
         val ipv4 = NetworkAddresses.preferredHost(peer, nics.map { it.ipv4 }, nics.first().ipv4)
-        val ad = Mdns.advertisement(who.name, who.deviceId, listen, ipv4)
+        val ad = Mdns.advertisement(who.name, who.deviceId, listen, ipv4, who.publicKeyHex)
         val reply = Mdns.response(data, ad) ?: return
         val names = Mdns.questionNames(data).joinToString()
         val from = SsdpReply.peer(packet.address, packet.port)

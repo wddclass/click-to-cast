@@ -18,3 +18,10 @@
 - 播放地址过期时的中文提示
 
 如果以后要搬它的源码，必须先按 GPL-3.0 处理，不能只在这里补一行署名。
+
+## pyatv
+
+- 仓库：https://github.com/postlund/pyatv
+- 许可证：MIT
+
+AirPlay 的旧版 pair-verify 报文布局（`01 00 00 00` 开头的公钥、SHA-512 标签 `Pair-Verify-AES-Key` / `Pair-Verify-AES-IV`、第二包签名从第 64 字节密钥流开始）对照的是 pyatv 里公开的客户端流程。Kotlin 实现是自己写的，没有拷贝它的 Python。

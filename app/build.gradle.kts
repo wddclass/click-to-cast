@@ -11,7 +11,7 @@ android {
         applicationId = "com.wddclass.clicktocast"
         minSdk = 23
         targetSdk = 35
-        versionCode = 6
+        versionCode = 7
         versionName = "0.1.0"
         vectorDrawables.useSupportLibrary = true
     }
@@ -100,6 +100,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
     implementation("androidx.media3:media3-exoplayer-dash:$media3")
     implementation("androidx.media3:media3-ui:$media3")
+    implementation("org.bouncycastle:bcprov-jdk15to18:1.78.1")
 
     testImplementation("junit:junit:4.13.2")
 }

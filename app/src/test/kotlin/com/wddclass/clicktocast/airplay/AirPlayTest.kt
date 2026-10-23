@@ -52,14 +52,16 @@ class AirPlayTest {
         assertEquals(0, first and 0x01)
         assertEquals(0x02, first and 0x02)
         assertEquals(17, mac.length)
-        val txt = AirPlayTexts.airplayTxt(mac)
+        val pk = AirPlayKeys.fromSeed(ByteArray(32) { 7 }).publicKeyHex
+        val txt = AirPlayTexts.airplayTxt(mac, pk)
         assertEquals(AirPlayTexts.FEATURES, txt["features"])
-        assertEquals(AirPlayTexts.PUBLIC_KEY, txt["pk"])
+        assertEquals(pk, txt["pk"])
+        assertEquals(64, pk.length)
         assertEquals(mac, txt["deviceid"])
         assertEquals(36, AirPlayTexts.pi(mac).length)
         val raop = AirPlayTexts.raopInstanceName(mac, "投屏点我")
         assertEquals("${mac.replace(":", "")}@投屏点我", raop)
-        assertTrue(AirPlayTexts.raopTxt(mac).containsKey("ft"))
+        assertTrue(AirPlayTexts.raopTxt(mac, pk).containsKey("ft"))
         val info = AirPlayTexts.serverInfo(mac)
         assertTrue(info.contains("<key>deviceid</key><string>$mac</string>"))
         assertTrue(info.contains("srcvers"))
@@ -68,7 +70,12 @@ class AirPlayTest {
     @Test
     fun httpPlayScrubRateAndStop() {
         val sink = FakeSink()
-        val handler = AirPlayHandler({ AirPlayIdentity("投屏点我", "12:11:11:22:22:33") }, sink)
+        val keys = AirPlayKeys.fromSeed(ByteArray(32) { (it + 1).toByte() })
+        val handler = AirPlayHandler(
+            { AirPlayIdentity("投屏点我", "12:11:11:22:22:33", keys.publicKeyHex) },
+            sink,
+            keys,
+        )
         assertNull(handler.handle(HttpRequest("GET", "/dmr/description.xml", emptyMap(), ByteArray(0), "10.0.0.8")))
 
         val play = handler.handle(
@@ -130,10 +137,10 @@ class AirPlayTest {
         assertEquals(4L, parsed["statusFlags"])
         assertEquals("投屏点我", parsed["name"])
         val pk = parsed["pk"] as ByteArray
-        assertTrue(pk.contentEquals(AirPlayTexts.publicKeyBytes()))
+        assertTrue(pk.contentEquals(keys.edPublic))
         val txt = String(parsed["txtAirPlay"] as ByteArray, Charsets.ISO_8859_1)
         assertTrue(txt.contains("features=${AirPlayTexts.FEATURES}"))
-        assertTrue(txt.contains("pk=${AirPlayTexts.PUBLIC_KEY}"))
+        assertTrue(txt.contains("pk=${keys.publicKeyHex}"))
         assertTrue(txt.contains("model=AppleTV3,2"))
         assertTrue(txt.contains("deviceid=12:11:11:22:22:33"))
         val wire = String(deviceInfo.toBytes("RTSP/1.0"), Charsets.ISO_8859_1)
@@ -142,9 +149,9 @@ class AirPlayTest {
         assertFalse(wire.contains("Connection: close"))
 
         val denied = handler.handle(HttpRequest("POST", "/pair-setup", emptyMap(), byteArrayOf(1), "10.0.0.9"))
-        assertEquals(501, denied?.status)
+        assertEquals(400, denied?.status)
         val verify = handler.handle(HttpRequest("POST", "/pair-verify", emptyMap(), byteArrayOf(1), "10.0.0.9"))
-        assertEquals(501, verify?.status)
+        assertEquals(403, verify?.status)
         val fairplay = handler.handle(
             HttpRequest("POST", "/fp-setup", emptyMap(), ByteArray(16), "192.168.123.8", protocol = "RTSP/1.0"),
         )
@@ -164,8 +171,66 @@ class AirPlayTest {
     }
 
     @Test
+    fun legacyPairSetupThenVerify() {
+        val server = AirPlayKeys.fromSeed(ByteArray(32) { (it + 1).toByte() })
+        val client = AirPlayKeys.fromSeed(ByteArray(32) { (it + 9).toByte() })
+        val handler = AirPlayHandler(
+            { AirPlayIdentity("投屏点我", "12:11:11:22:22:33", server.publicKeyHex) },
+            FakeSink(),
+            server,
+        )
+        val setup = handler.handle(
+            HttpRequest(
+                "POST",
+                "/pair-setup",
+                mapOf("cseq" to "1", "content-type" to "application/octet-stream"),
+                client.edPublic,
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(200, setup?.status)
+        assertTrue(server.edPublic.contentEquals(setup!!.body))
+        assertTrue(String(setup.toBytes("RTSP/1.0"), Charsets.ISO_8859_1).startsWith("RTSP/1.0 200 OK"))
+
+        val eph = client.newX25519()
+        val ephPub = eph.generatePublicKey().encoded
+        val first = byteArrayOf(1, 0, 0, 0) + ephPub + client.edPublic
+        val step1 = handler.handle(
+            HttpRequest("POST", "/pair-verify", mapOf("cseq" to "2"), first, "192.168.123.8", protocol = "RTSP/1.0"),
+        )
+        assertEquals(200, step1?.status)
+        assertEquals(96, step1!!.body.size)
+        val serverX = step1.body.copyOf(32)
+        val encrypted = step1.body.copyOfRange(32, 96)
+        val shared = AirPlayKeys.sharedSecret(eph, serverX)
+        val aesKey = AirPlayKeys.sha512("Pair-Verify-AES-Key", shared).copyOf(16)
+        val aesIv = AirPlayKeys.sha512("Pair-Verify-AES-IV", shared).copyOf(16)
+        val serverSig = AirPlayKeys.ctr(aesKey, aesIv, 0, encrypted)
+        assertTrue(AirPlayKeys.verify(server.edPublic, serverX + ephPub, serverSig))
+
+        val clientSig = client.sign(ephPub + serverX)
+        val second = byteArrayOf(0, 0, 0, 0) + AirPlayKeys.ctr(aesKey, aesIv, 64, clientSig)
+        val step2 = handler.handle(
+            HttpRequest("POST", "/pair-verify", mapOf("cseq" to "3"), second, "192.168.123.8", protocol = "RTSP/1.0"),
+        )
+        assertEquals(200, step2?.status)
+
+        val forged = second.copyOf()
+        forged[forged.size - 1] = (forged[forged.size - 1].toInt() xor 0xFF).toByte()
+        handler.handle(
+            HttpRequest("POST", "/pair-verify", emptyMap(), first, "192.168.123.9", protocol = "RTSP/1.0"),
+        )
+        val rejected = handler.handle(
+            HttpRequest("POST", "/pair-verify", emptyMap(), forged, "192.168.123.9", protocol = "RTSP/1.0"),
+        )
+        assertEquals(403, rejected?.status)
+    }
+
+    @Test
     fun mdnsAnnounceAnswersAndGoodbye() {
-        val ad = Mdns.advertisement("投屏点我", "AA:BB:CC:DD:EE:FF", 8192, "192.168.123.2")
+        val pk = AirPlayKeys.fromSeed(ByteArray(32) { 4 }).publicKeyHex
+        val ad = Mdns.advertisement("投屏点我", "AA:BB:CC:DD:EE:FF", 8192, "192.168.123.2", pk)
         val packets = Mdns.announce(ad)
         assertEquals(2, packets.size)
         val airplay = packets[0]

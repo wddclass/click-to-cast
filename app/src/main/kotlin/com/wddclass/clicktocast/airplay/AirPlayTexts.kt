@@ -3,7 +3,7 @@ package com.wddclass.clicktocast.airplay
 import java.net.URLDecoder
 import java.util.Locale
 
-data class AirPlayIdentity(val name: String, val deviceId: String)
+data class AirPlayIdentity(val name: String, val deviceId: String, val publicKeyHex: String)
 
 data class PlayCommand(val url: String, val startFraction: Double)
 
@@ -24,18 +24,16 @@ object AirPlayTexts {
     /** Apple TV 3,2 is the unauthenticated video-URL generation. 5,3 asks for FairPlay. */
     const val MODEL = "AppleTV3,2"
 
-    /** Low 32 bits, then high 32 bits, as mDNS TXT writes them. */
-    const val FEATURES = "0x5A7FFFF7,0x1E"
-
-    /** Same bits as one integer: (0x1E << 32) | 0x5A7FFFF7. /info must use this, not the low half. */
-    const val FEATURES_INT = 130367356919L
-
     /**
-     * 32-byte Ed25519 public key from the public RFC 8032 test vector, hex for the TXT `pk`.
-     * The matching plist value is these bytes, not the hex text. Pairing is not implemented,
-     * so this key cannot decrypt a mirrored stream.
+     * Low 32 bits, then high 32 bits. Video, photos, HLS and audio stay on.
+     * Screen (bit 7) and VideoFairPlay (bit 2) are off so iOS is steered toward a
+     * video URL (/play) instead of FairPlay mirroring. The high half stays 0x1E,
+     * which is the mask that made iOS 26 send the 32-byte legacy pair-setup.
      */
-    const val PUBLIC_KEY = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+    const val FEATURES = "0x5A7FFF73,0x1E"
+
+    /** (0x1E << 32) | 0x5A7FFF73. /info must use this full value. */
+    const val FEATURES_INT = 130367356787L
 
     fun macFromUuid(uuid: String): String {
         val hex = uuid.lowercase().filter { it in '0'..'9' || it in 'a'..'f' }
@@ -55,15 +53,6 @@ object AirPlayTexts {
             padded.substring(20, 32)
     }
 
-    fun publicKeyBytes(): ByteArray {
-        val hex = PUBLIC_KEY
-        val out = ByteArray(hex.length / 2)
-        for (index in out.indices) {
-            out[index] = hex.substring(index * 2, index * 2 + 2).toInt(16).toByte()
-        }
-        return out
-    }
-
     /** DNS-SD TXT wire format: a length byte plus `key=value` for each entry. */
     fun packTxt(txt: Map<String, String>): ByteArray {
         val out = java.io.ByteArrayOutputStream()
@@ -79,7 +68,7 @@ object AirPlayTexts {
         return out.toByteArray()
     }
 
-    fun airplayTxt(deviceId: String): Map<String, String> = linkedMapOf(
+    fun airplayTxt(deviceId: String, publicKeyHex: String): Map<String, String> = linkedMapOf(
         "deviceid" to deviceId,
         "features" to FEATURES,
         "model" to MODEL,
@@ -87,11 +76,11 @@ object AirPlayTexts {
         "vv" to "2",
         "flags" to "0x4",
         "pw" to "false",
-        "pk" to PUBLIC_KEY,
+        "pk" to publicKeyHex,
         "pi" to pi(deviceId),
     )
 
-    fun raopTxt(deviceId: String): Map<String, String> = linkedMapOf(
+    fun raopTxt(deviceId: String, publicKeyHex: String): Map<String, String> = linkedMapOf(
         "txtvers" to "1",
         "ch" to "2",
         "cn" to "0,1",
@@ -108,7 +97,7 @@ object AirPlayTexts {
         "am" to MODEL,
         "sf" to "0x4",
         "ft" to FEATURES,
-        "pk" to PUBLIC_KEY,
+        "pk" to publicKeyHex,
         "deviceid" to deviceId,
     )
 
@@ -130,11 +119,12 @@ object AirPlayTexts {
      * statusFlags 4 is the usual "ready, no password" value. Screen mirroring is not offered
      * as a display stream; FairPlay is not implemented.
      */
-    fun infoPlist(name: String, deviceId: String): ByteArray {
+    fun infoPlist(name: String, deviceId: String, publicKey: ByteArray): ByteArray {
         val shown = name.trim().ifBlank { "投屏点我" }
         val identifier = pi(deviceId)
-        val airplay = airplayTxt(deviceId)
-        val raop = raopTxt(deviceId)
+        val publicKeyHex = AirPlayKeys.hex(publicKey)
+        val airplay = airplayTxt(deviceId, publicKeyHex)
+        val raop = raopTxt(deviceId, publicKeyHex)
         val dict = linkedMapOf<String, Any>(
             "deviceID" to deviceId,
             "macAddress" to deviceId,
@@ -147,7 +137,7 @@ object AirPlayTexts {
             "vv" to 2,
             "statusFlags" to 4,
             "name" to shown,
-            "pk" to publicKeyBytes(),
+            "pk" to publicKey,
             "pi" to identifier,
             "txtAirPlay" to packTxt(airplay),
             "txtRAOP" to packTxt(raop),

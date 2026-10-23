@@ -34,7 +34,13 @@ object Mdns {
         val services: List<ServiceRecord>,
     )
 
-    fun advertisement(name: String, deviceId: String, port: Int, ipv4: String): Advertisement {
+    fun advertisement(
+        name: String,
+        deviceId: String,
+        port: Int,
+        ipv4: String,
+        publicKeyHex: String,
+    ): Advertisement {
         val shown = name.trim().ifBlank { "投屏点我" }
         return Advertisement(
             name = shown,
@@ -42,11 +48,11 @@ object Mdns {
             port = port,
             ipv4 = ipv4,
             services = listOf(
-                ServiceRecord(AIRPLAY_TYPE, instanceLabel(shown), AirPlayTexts.airplayTxt(deviceId)),
+                ServiceRecord(AIRPLAY_TYPE, instanceLabel(shown), AirPlayTexts.airplayTxt(deviceId, publicKeyHex)),
                 ServiceRecord(
                     RAOP_TYPE,
                     instanceLabel(AirPlayTexts.raopInstanceName(deviceId, shown)),
-                    AirPlayTexts.raopTxt(deviceId),
+                    AirPlayTexts.raopTxt(deviceId, publicKeyHex),
                 ),
             ),
         )

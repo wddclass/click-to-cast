@@ -58,7 +58,9 @@ class RendererAirPlaySink(private val renderer: DlnaRenderer) : AirPlaySink {
 class AirPlayHandler(
     private val identity: () -> AirPlayIdentity,
     private val sink: AirPlaySink,
+    private val keys: AirPlayKeys,
 ) {
+    private val pairing = AirPlayPairing(keys)
     fun handle(request: HttpRequest): HttpResponse? {
         val response = dispatch(request)
         if (response == null && !shouldLog(request)) return null
@@ -74,7 +76,9 @@ class AirPlayHandler(
         "/info" -> if (request.method == "GET" || request.method == "POST") info() else null
         "/server-info" -> if (request.method == "GET") xml(AirPlayTexts.serverInfo(identity().deviceId)) else null
         "/playback-info" -> if (request.method == "GET") xml(AirPlayTexts.playbackInfo(sink.status())) else null
-        "/pair-setup", "/pair-verify", "/pair-add" -> refuse(request)
+        "/pair-setup" -> if (request.method == "POST") pairSetup(request) else null
+        "/pair-verify" -> if (request.method == "POST") pairVerify(request) else null
+        "/pair-add", "/pair-pin-start" -> if (request.method == "POST") acknowledge(request) else null
         "/fp-setup" -> fairplay(request)
         "/feedback" -> if (request.method == "POST" || request.method == "GET") empty(200, "OK") else null
         "*", "/options" -> if (request.method == "OPTIONS") options() else null
@@ -151,8 +155,42 @@ class AirPlayHandler(
             200,
             "OK",
             linkedMapOf("Content-Type" to "application/x-apple-binary-plist"),
-            AirPlayTexts.infoPlist(who.name, who.deviceId),
+            AirPlayTexts.infoPlist(who.name, who.deviceId, keys.edPublic),
         )
+    }
+
+    private fun pairSetup(request: HttpRequest): HttpResponse {
+        val hkp = request.header("x-apple-hkp") ?: "-"
+        DmrLog.i(
+            "airplay pair-setup from ${request.remoteIp} hkp=$hkp bytes=${request.body.size} " +
+                "hex=${AirPlayKeys.hexPrefix(request.body, 32)}",
+        )
+        val reply = pairing.pairSetup(request.remoteIp, request.body)
+        if (reply == null) {
+            DmrLog.i("airplay pair-setup rejected: expected 32-byte Ed25519 public key, not TLV/SRP")
+            return empty(400, "Bad Request")
+        }
+        DmrLog.i("airplay pair-setup ok, replied with 32-byte Ed25519 public key")
+        return octets(reply)
+    }
+
+    private fun pairVerify(request: HttpRequest): HttpResponse {
+        DmrLog.i(
+            "airplay pair-verify from ${request.remoteIp} bytes=${request.body.size} " +
+                "hex=${AirPlayKeys.hexPrefix(request.body, 8)}",
+        )
+        val reply = pairing.pairVerify(request.remoteIp, request.body)
+        if (reply == null) {
+            DmrLog.i("airplay pair-verify failed from ${request.remoteIp}")
+            return empty(403, "Forbidden")
+        }
+        DmrLog.i("airplay pair-verify step ok from ${request.remoteIp} reply=${reply.size}")
+        return octets(reply)
+    }
+
+    private fun acknowledge(request: HttpRequest): HttpResponse {
+        DmrLog.i("airplay ${request.path} from ${request.remoteIp} bytes=${request.body.size}")
+        return empty(200, "OK")
     }
 
     private fun fairplay(request: HttpRequest): HttpResponse {
@@ -171,14 +209,6 @@ class AirPlayHandler(
             "Public" to "ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, POST, GET",
         ),
     )
-
-    private fun refuse(request: HttpRequest): HttpResponse {
-        DmrLog.i(
-            "airplay ${request.path} from ${request.remoteIp} bytes=${request.body.size}; " +
-                "pairing is not implemented, video URL /play does not need it",
-        )
-        return empty(501, "Not Implemented")
-    }
 
     private fun reverse(request: HttpRequest): HttpResponse {
         val upgrade = request.header("upgrade")?.contains("PTTH", ignoreCase = true) == true
@@ -241,6 +271,13 @@ class AirPlayHandler(
     private fun empty(status: Int, reason: String): HttpResponse =
         HttpResponse(status, reason, linkedMapOf("Content-Length" to "0"))
 
+    private fun octets(body: ByteArray): HttpResponse = HttpResponse(
+        200,
+        "OK",
+        linkedMapOf("Content-Type" to "application/octet-stream"),
+        body,
+    )
+
     private fun text(status: Int, reason: String, body: String, type: String = "text/plain"): HttpResponse =
         HttpResponse(status, reason, linkedMapOf("Content-Type" to type), body.toByteArray(Charsets.UTF_8))
 
@@ -255,6 +292,7 @@ class AirPlayHandler(
             "connection",
             "content-length",
             "x-apple-purpose",
+            "x-apple-hkp",
         )
     }
 }

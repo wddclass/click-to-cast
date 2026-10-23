@@ -56,8 +56,8 @@ export ANDROID_HOME=...
 
 ## 已知限制
 
-- DLNA / UPnP 之外，另有 AirPlay 视频地址播放。应用在每块 IPv4 网卡上直接向 `224.0.0.251:5353` 宣告 `_airplay._tcp` 和 `_raop._tcp`（TTL 255），并回答同网段的 mDNS 查询。IP 变化或改名后会先发 TTL 0 的 goodbye，再按新地址重新宣告。iPhone 的 `GET /info` 是 **RTSP/1.0**，响应是 `RTSP/1.0 200`、二进制 plist，`deviceID` / `pk` / `features`（`0x5A7FFFF7,0x1E` = `130367356919`）/ `model=AppleTV3,2` / `sourceVersion` 与 mDNS TXT 一致。同一条 RTSP 连接会继续读下一条请求。手机把视频 URL POST 到 `/play` 后由同一播放器开播。`/reverse` 带 `Upgrade: PTTH/1.0` 时回 `101` 并保持连接。
-- iPhone 控制中心能不能列出「投屏点我」，取决于系统会不会接受一台没有完成 HAP pair-setup / pair-verify 的接收端。这两步不是 FairPlay，但这一版不做配对握手；`/pair-setup`、`/pair-verify`、`/pair-add` 会记一条日志并返回 501。屏幕镜像仍然需要 FairPlay，选中后不会出画面。RAOP 只做发现，不传 RTP 音频。同一局域网里可以用 `dns-sd -B _airplay._tcp` 或 `avahi-browse -r _airplay._tcp` 确认宣告是否发出；logcat 标签 `ClickToCast` 会看到 `airplay mdns announce`。
+- DLNA / UPnP 之外，另有 AirPlay 视频地址播放。应用在每块 IPv4 网卡上直接向 `224.0.0.251:5353` 宣告 `_airplay._tcp` 和 `_raop._tcp`（TTL 255），并回答同网段的 mDNS 查询。IP 变化或改名后会先发 TTL 0 的 goodbye，再按新地址重新宣告。iPhone 的 `GET /info` 是 **RTSP/1.0**，响应是 `RTSP/1.0 200`、二进制 plist，`deviceID` / `pk` / `features`（`0x5A7FFF73,0x1E` = `130367356787`）/ `model=AppleTV3,2` / `sourceVersion` 与 mDNS TXT 一致。`pk` 是这台电视自己的 Ed25519 公钥。同一条 RTSP 连接会继续读下一条请求。手机把视频 URL POST 到 `/play` 后由同一播放器开播。`/reverse` 带 `Upgrade: PTTH/1.0` 时回 `101` 并保持连接。
+- iOS 26 在 `GET /info` 之后会发 `POST /pair-setup`，正文是 32 字节的 Ed25519 公钥。电视回自己的 32 字节公钥（和 mDNS / `/info` 里的 `pk` 是同一把），再完成 `pair-verify`（X25519 临时密钥 + Ed25519 签名，AES-128-CTR）。配对成功后，Safari、照片、YouTube 这类会发视频地址的 App 走明文 `POST /play`。这不是 HomeKit SRP，也不会把后面的控制通道用 ChaCha20-Poly1305 加密。`features` 去掉了屏幕镜像位和 VideoFairPlay 位（`0x5A7FFF73,0x1E`），避免系统优先走镜像。镜像仍然要 FairPlay，`/fp-setup` 回 501，不会出画面。RAOP 只做发现，不传 RTP 音频。logcat 标签 `ClickToCast` 会看到 `airplay pair-setup` 和 `airplay pair-verify`。
 - Miracast、Chromecast、乐播 / 乐联私有协议仍未实现。
 - 爱奇艺、优酷、腾讯视频、Bilibili 的部分版本只走私有协议，或者地址带短时签名和 DRM。它们走标准 DLNA 时可以被发现；走私有协议时列表里不会出现本应用，或者给出地址后无法播放。
 - 不转码。编码、封装或 DRM 电视硬解不了，就会直接失败。

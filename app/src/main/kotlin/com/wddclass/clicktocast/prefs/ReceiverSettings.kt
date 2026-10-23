@@ -25,6 +25,12 @@ class ReceiverSettings(context: Context) {
             prefs.edit().putBoolean(KEY_BROWSER_UA, value).apply()
         }
 
+    var overlayHintDismissed: Boolean
+        get() = prefs.getBoolean(KEY_OVERLAY_DISMISS, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_OVERLAY_DISMISS, value).apply()
+        }
+
     val deviceUuid: String
         get() {
             val existing = prefs.getString(KEY_UUID, null)
@@ -47,5 +53,6 @@ class ReceiverSettings(context: Context) {
         private const val KEY_AUTO = "auto_start"
         private const val KEY_BROWSER_UA = "browser_ua"
         private const val KEY_UUID = "uuid"
+        private const val KEY_OVERLAY_DISMISS = "overlay_hint_dismissed"
     }
 }

@@ -32,7 +32,7 @@
     <string name="history_replay_started">正在重播</string>
     <string name="about_title">关于</string>
     <string name="about_body">投屏点我是电视上的 DLNA 接收端。手机里的视频 App 把播放地址发给电视，电视用自己的播放器打开。没有账号，没有广告，也不会把观看记录发到外面。</string>
-    <string name="about_limits">DLNA 投屏可用。AirPlay 会宣告「投屏点我」，并用 RTSP /info 接视频地址。屏幕镜像要 FairPlay，这一版解不了，所以镜像不会出画面。乐播私有协议和带 DRM 的片源仍不支持。</string>
+    <string name="about_limits">DLNA 投屏可用。AirPlay 会宣告「投屏点我」，完成 32 字节配对后用 /play 接视频地址。屏幕镜像要 FairPlay，这一版解不了。乐播私有协议和带 DRM 的片源仍不支持。</string>
     <string name="about_version">版本 %1$s</string>
     <string name="back">返回</string>
     <string name="play_pause">播放或暂停</string>
@@ -42,8 +42,9 @@
     <string name="speed_button">倍速 1×</string>
     <string name="speed_label">倍速 %1$s×</string>
     <string name="speed_choice">%1$s×</string>
-    <string name="overlay_needed">后台收到投屏时要自动打开画面，请允许「显示在其他应用上层」</string>
+    <string name="overlay_needed">后台收到投屏时自动打开画面，需要允许「显示在其他应用上层」</string>
     <string name="overlay_open">去开启</string>
+    <string name="overlay_dismiss">关闭</string>
     <string name="overlay_settings_title">后台打开播放</string>
     <string name="overlay_on">已允许显示在其他应用上层。电视回到桌面后，新的投屏会自动打开播放画面。</string>
     <string name="overlay_off">尚未允许。请到系统设置里为「投屏点我」打开「显示在其他应用上层」（有的系统叫悬浮窗）。不开启的话，投屏时请先打开本应用，或点通知进入播放。</string>

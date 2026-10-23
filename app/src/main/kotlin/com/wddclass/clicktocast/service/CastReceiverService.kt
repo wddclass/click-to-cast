@@ -21,6 +21,7 @@ import com.wddclass.clicktocast.BuildConfig
 import com.wddclass.clicktocast.airplay.AirPlayAdvertiser
 import com.wddclass.clicktocast.airplay.AirPlayHandler
 import com.wddclass.clicktocast.airplay.AirPlayIdentity
+import com.wddclass.clicktocast.airplay.AirPlayKeys
 import com.wddclass.clicktocast.airplay.AirPlayTexts
 import com.wddclass.clicktocast.airplay.RendererAirPlaySink
 import com.wddclass.clicktocast.R
@@ -90,6 +91,7 @@ class CastReceiverService : Service() {
     private lateinit var http: MiniHttpServer
     private lateinit var ssdp: SsdpAdvertiser
     private lateinit var airplayMdns: AirPlayAdvertiser
+    private lateinit var airplayKeys: AirPlayKeys
     private var audio: AudioManager? = null
     private var multicast: WifiManager.MulticastLock? = null
     private var httpPort = Upnp.PREFERRED_PORT
@@ -137,7 +139,8 @@ class CastReceiverService : Service() {
         appliedIndex = audio?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: -1
         appliedMuted = muted
         renderer.adoptVolume(percent, muted, echo = false)
-        val airplay = AirPlayHandler({ airplayIdentity() }, RendererAirPlaySink(renderer))
+        airplayKeys = AirPlayKeys.fromSeed(AirPlayKeys.seedFor(settings.deviceUuid))
+        val airplay = AirPlayHandler({ airplayIdentity() }, RendererAirPlaySink(renderer), airplayKeys)
         http = MiniHttpServer { request ->
             airplay.handle(request)
                 ?: RendererHttpHandler(renderer, { currentProfile() }, events).handle(request)
@@ -172,7 +175,7 @@ class CastReceiverService : Service() {
     private fun airplayIdentity(): AirPlayIdentity {
         val name = settings.deviceName.ifBlank { Upnp.DEFAULT_FRIENDLY_NAME }
         val mac = NetworkAddresses.hardwareMac() ?: AirPlayTexts.macFromUuid(settings.deviceUuid)
-        return AirPlayIdentity(name, mac)
+        return AirPlayIdentity(name, mac, airplayKeys.publicKeyHex)
     }
 
     private fun currentProfile(): DeviceProfile = DeviceProfile(

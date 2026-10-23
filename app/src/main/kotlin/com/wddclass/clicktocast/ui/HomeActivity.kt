@@ -8,6 +8,7 @@ import android.view.View
 import android.widget.TextView
 import com.wddclass.clicktocast.R
 import com.wddclass.clicktocast.dlna.Upnp
+import com.wddclass.clicktocast.prefs.ReceiverSettings
 import com.wddclass.clicktocast.service.CastReceiverService
 import com.wddclass.clicktocast.service.StatusTone
 import com.wddclass.clicktocast.service.UiState
@@ -23,8 +24,13 @@ class HomeActivity : TvActivity() {
         val history = findViewById<TextView>(R.id.open_history)
         val about = findViewById<TextView>(R.id.open_about)
         val overlay = findViewById<TextView>(R.id.overlay_open)
-        Pills.attach(settings, history, about, overlay)
+        val dismiss = findViewById<TextView>(R.id.overlay_dismiss)
+        Pills.attach(settings, history, about, overlay, dismiss)
         overlay.setOnClickListener { OverlayGuide.open(this) }
+        dismiss.setOnClickListener {
+            ReceiverSettings(this).overlayHintDismissed = true
+            paintOverlay()
+        }
         settings.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         history.setOnClickListener { startActivity(Intent(this, HistoryActivity::class.java)) }
         about.setOnClickListener { startActivity(Intent(this, AboutActivity::class.java)) }
@@ -77,7 +83,7 @@ class HomeActivity : TvActivity() {
     }
 
     private fun paintOverlay() {
-        val allowed = OverlayGuide.allowed(this)
-        findViewById<View>(R.id.overlay_banner).visibility = if (allowed) View.GONE else View.VISIBLE
+        val show = !OverlayGuide.allowed(this) && !ReceiverSettings(this).overlayHintDismissed
+        findViewById<View>(R.id.overlay_banner).visibility = if (show) View.VISIBLE else View.GONE
     }
 }
