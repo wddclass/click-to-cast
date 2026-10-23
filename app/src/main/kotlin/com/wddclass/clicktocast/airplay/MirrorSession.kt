@@ -100,6 +100,13 @@ class MirrorSession(
         show()
     }
 
+    /** NTP toward the phone. The mirror view stays closed until a type 110 stream arrives. */
+    fun noteTiming(remoteIp: String, clientTimingPort: Int) {
+        if (clientTimingPort <= 0) return
+        DmrLog.i("airplay timing from session SETUP to $remoteIp:$clientTimingPort")
+        startTiming(remoteIp, clientTimingPort)
+    }
+
     fun armAudio(rawKey: ByteArray, ecdhSecret: ByteArray?, eiv: ByteArray?, ct: Int) {
         val mixed = MirrorKeys.mixWithEcdh(rawKey, ecdhSecret)
         audioKey = mixed

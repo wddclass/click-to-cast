@@ -286,9 +286,32 @@ class AirPlayTest {
         assertEquals(32, second!!.body.size)
         assertTrue(second.body.copyOfRange(12, 32).contentEquals(phase2.copyOfRange(144, 164)))
 
-        val setupBody = BinaryPlist.write(
+        val sessionBody = BinaryPlist.write(
             linkedMapOf(
                 "ekey" to ByteArray(72) { 1 },
+                "eiv" to ByteArray(16) { 2 },
+                "timingPort" to 7010,
+                "isScreenMirroringSession" to true,
+            ),
+        )
+        val session = handler.handle(
+            HttpRequest(
+                "SETUP",
+                "/stream",
+                mapOf("cseq" to "6", "content-type" to "application/x-apple-binary-plist"),
+                sessionBody,
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(200, session?.status)
+        val sessionPlist = BinaryPlist.top(session!!.body) as Map<*, *>
+        assertEquals(8192L, sessionPlist["eventPort"])
+        assertTrue((sessionPlist["timingPort"] as Long) > 0L)
+        assertFalse(sessionPlist.containsKey("streams"))
+
+        val streamBody = BinaryPlist.write(
+            linkedMapOf(
                 "streams" to listOf(linkedMapOf<String, Any>("type" to 110, "streamConnectionID" to 7L)),
             ),
         )
@@ -296,8 +319,8 @@ class AirPlayTest {
             HttpRequest(
                 "SETUP",
                 "/stream",
-                mapOf("cseq" to "6", "content-type" to "application/x-apple-binary-plist"),
-                setupBody,
+                mapOf("cseq" to "7", "content-type" to "application/x-apple-binary-plist"),
+                streamBody,
                 "192.168.123.8",
                 protocol = "RTSP/1.0",
             ),
@@ -305,18 +328,82 @@ class AirPlayTest {
         assertEquals(200, setup?.status)
         assertEquals("application/x-apple-binary-plist", setup?.headers?.get("Content-Type"))
         val parsed = BinaryPlist.top(setup!!.body) as Map<*, *>
-        assertEquals(8192L, parsed["eventPort"])
-        assertTrue((parsed["timingPort"] as Long) > 0L)
+        assertFalse(parsed.containsKey("eventPort"))
+        assertFalse(parsed.containsKey("timingPort"))
         val streams = parsed["streams"] as List<*>
         val stream = streams[0] as Map<*, *>
         assertEquals(110L, stream["type"])
-        assertEquals(7L, stream["streamConnectionID"])
+        assertFalse(stream.containsKey("streamConnectionID"))
         assertTrue((stream["dataPort"] as Long) > 0L)
 
+        val volume = handler.handle(
+            HttpRequest(
+                "GET_PARAMETER",
+                "/stream",
+                mapOf("cseq" to "8", "content-type" to "text/parameters"),
+                "volume\r\n".toByteArray(),
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(200, volume?.status)
+        assertEquals("text/parameters", volume?.headers?.get("Content-Type"))
+        assertEquals("volume: 0.000000\r\n", String(volume!!.body, Charsets.UTF_8))
+
         val record = handler.handle(
-            HttpRequest("RECORD", "/stream", mapOf("cseq" to "7"), ByteArray(0), "192.168.123.8", protocol = "RTSP/1.0"),
+            HttpRequest("RECORD", "/stream", mapOf("cseq" to "9"), ByteArray(0), "192.168.123.8", protocol = "RTSP/1.0"),
         )
         assertEquals(200, record?.status)
+        assertEquals("11025", record?.headers?.get("Audio-Latency"))
+        assertEquals("connected; type=analog", record?.headers?.get("Audio-Jack-Status"))
+
+        val audioTeardown = BinaryPlist.write(
+            linkedMapOf("streams" to listOf(linkedMapOf<String, Any>("type" to 96))),
+        )
+        val emptyTeardown = byteArrayOf(
+            0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x30, 0x30,
+            0xd0.toByte(),
+            0x08,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09,
+        )
+        assertEquals(42, emptyTeardown.size)
+        val emptyDict = BinaryPlist.top(emptyTeardown) as Map<*, *>
+        assertTrue(emptyDict.isEmpty())
+        assertTrue(MirrorTeardown.stopsVideo(emptyList()))
+        assertFalse(MirrorTeardown.stopsVideo(listOf(96L)))
+        assertTrue(MirrorTeardown.stopsVideo(listOf(110L)))
+        val audioDown = handler.handle(
+            HttpRequest(
+                "TEARDOWN",
+                "/stream",
+                mapOf("cseq" to "10"),
+                audioTeardown,
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(200, audioDown?.status)
+        assertEquals("close", audioDown?.headers?.get("Connection"))
+        val fullDown = handler.handle(
+            HttpRequest(
+                "TEARDOWN",
+                "/stream",
+                mapOf("cseq" to "12"),
+                emptyTeardown,
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(200, fullDown?.status)
+        val videoTeardown = BinaryPlist.write(
+            linkedMapOf("streams" to listOf(linkedMapOf<String, Any>("type" to 110))),
+        )
+        assertEquals(200, handler.handle(
+            HttpRequest("TEARDOWN", "/stream", mapOf("cseq" to "11"), videoTeardown, "192.168.123.8", protocol = "RTSP/1.0"),
+        )?.status)
         val play = handler.handle(
             HttpRequest(
                 "POST",

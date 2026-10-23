@@ -65,6 +65,9 @@ class AirPlayHandler(
     private val pairing = AirPlayPairing(keys)
     private val ports = AirPlayPorts(mirror)
     private var fairPlayMessage: ByteArray? = null
+    private var sessionKey: ByteArray? = null
+    private var sessionIv: ByteArray? = null
+    private var clientTimingPort: Int = 0
     fun handle(request: HttpRequest): HttpResponse? {
         val response = dispatch(request)
         if (response == null && !shouldLog(request)) return null
@@ -79,14 +82,11 @@ class AirPlayHandler(
     private fun dispatch(request: HttpRequest): HttpResponse? {
         when (request.method) {
             "SETUP" -> return setup(request)
-            "RECORD" -> return rtspSimple(request, "record")
+            "RECORD" -> return record(request)
             "GET_PARAMETER" -> return parameter(request, read = true)
             "SET_PARAMETER" -> return parameter(request, read = false)
             "FLUSH" -> return rtspSimple(request, "flush")
-            "TEARDOWN" -> {
-                mirror?.stop("teardown")
-                return rtspSimple(request, "teardown")
-            }
+            "TEARDOWN" -> return teardown(request)
             "ANNOUNCE" -> return rtspSimple(request, "announce")
         }
         return dispatchPath(request)
@@ -286,31 +286,53 @@ class AirPlayHandler(
         val eiv = parsed["eiv"] as? ByteArray
         val message = fairPlayMessage
         val clientTiming = number(parsed["timingPort"])?.toInt() ?: 0
+        if (clientTiming > 0) clientTimingPort = clientTiming
+        if (eiv != null) sessionIv = eiv.copyOf()
         DmrLog.i(
             "airplay SETUP from ${request.remoteIp} keys=${parsed.keys.joinToString(",")} " +
                 "ekey=${ekey?.size ?: 0} eiv=${eiv?.size ?: 0} keymsg=${message?.size ?: 0} " +
                 "clientTiming=$clientTiming timing=${ports.timingPort} data=${ports.dataPort} " +
-                "audio=${ports.audioPort} event=$events",
+                "audio=${ports.audioPort} event=$events mirroring=${parsed["isScreenMirroringSession"]}",
         )
-        val rawKey = unwrapKey(ekey, message)
-        val secret = pairing.ecdhSecret(request.remoteIp)
-        DmrLog.i("airplay ecdh ${if (secret == null) "absent" else "present"} rawKey=${rawKey?.size ?: 0}")
-        if (rawKey == null && ekey != null) {
-            mirror?.fail("镜像密钥解开失败")
+        if (ekey != null) {
+            sessionKey = unwrapKey(ekey, message)
+            val secret = pairing.ecdhSecret(request.remoteIp)
+            DmrLog.i(
+                "airplay ecdh ${if (secret == null) "absent" else "present"} " +
+                    "playfair=${sessionKey?.size ?: 0} stored for the stream SETUP",
+            )
         }
-        val streams = streamReplies(parsed["streams"]) { type, id, ct ->
-            if (rawKey == null) return@streamReplies
-            when (type) {
-                110L -> mirror?.armVideo(rawKey, secret, id, request.remoteIp, clientTiming)
-                96L -> mirror?.armAudio(rawKey, secret, eiv, ct)
+        val incoming = parsed["streams"] as? List<*>
+        val reply = linkedMapOf<String, Any>()
+        if (incoming == null || incoming.isEmpty()) {
+            reply["eventPort"] = events
+            reply["timingPort"] = ports.timingPort
+            if (clientTimingPort > 0) mirror?.noteTiming(request.remoteIp, clientTimingPort)
+            DmrLog.i(
+                "airplay SETUP session only; reply eventPort=$events timingPort=${ports.timingPort} " +
+                    "(no streams until the next SETUP)",
+            )
+        } else {
+            if (ekey != null || parsed.containsKey("timingPort") || parsed.containsKey("eiv")) {
+                reply["eventPort"] = events
+                reply["timingPort"] = ports.timingPort
+                if (clientTimingPort > 0) mirror?.noteTiming(request.remoteIp, clientTimingPort)
             }
+            val secret = pairing.ecdhSecret(request.remoteIp)
+            val streams = streamReplies(incoming) { type, id, ct ->
+                val rawKey = sessionKey
+                if (rawKey == null) {
+                    if (type == 110L) mirror?.fail("镜像密钥解开失败")
+                    return@streamReplies
+                }
+                when (type) {
+                    110L -> mirror?.armVideo(rawKey, secret, id, request.remoteIp, clientTimingPort)
+                    96L -> mirror?.armAudio(rawKey, secret, sessionIv, ct)
+                }
+            }
+            reply["streams"] = streams
+            DmrLog.i("airplay SETUP streams reply types=${streamTypes(streams)}")
         }
-        val reply = linkedMapOf<String, Any>(
-            "eventPort" to events,
-            "timingPort" to ports.timingPort,
-            "streams" to streams,
-        )
-        DmrLog.i("airplay SETUP reply streams=${streams.size} types=${streamTypes(streams)}")
         return HttpResponse(
             200,
             "OK",
@@ -343,12 +365,9 @@ class AirPlayHandler(
             val id = number(stream["streamConnectionID"]) ?: 0L
             val ct = number(stream["ct"])?.toInt() ?: 0
             val dataPort = if (type == 96L && ports.audioPort > 0) ports.audioPort else ports.dataPort
-            val reply = linkedMapOf<String, Any>(
-                "type" to type,
-                "dataPort" to dataPort,
-            )
-            if (id != 0L) reply["streamConnectionID"] = id
+            val reply = linkedMapOf<String, Any>("dataPort" to dataPort)
             if (type == 96L && ports.audioControlPort > 0) reply["controlPort"] = ports.audioControlPort
+            reply["type"] = type
             val kind = when (type) {
                 110L -> "mirror"
                 96L -> "audio"
@@ -357,11 +376,6 @@ class AirPlayHandler(
             DmrLog.i("airplay SETUP stream type=$type ($kind) id=$id ct=$ct data=$dataPort")
             onStream(type, id, ct)
             replies += reply
-        }
-        if (replies.isEmpty()) {
-            replies += linkedMapOf("type" to 110L, "dataPort" to ports.dataPort)
-            DmrLog.i("airplay SETUP had no streams; replying with type 110 data port")
-            onStream(110L, 0L, 0)
         }
         return replies
     }
@@ -373,7 +387,75 @@ class AirPlayHandler(
         val text = String(request.body, Charsets.UTF_8).replace('\r', ' ').take(120)
         DmrLog.i("airplay ${request.method} from ${request.remoteIp} body=$text")
         if (!read) return empty(200, "OK")
-        return text(200, "OK", "volume: 0.000000\n", "text/parameters")
+        if (String(request.body, Charsets.UTF_8).contains("volume")) {
+            return text(200, "OK", "volume: 0.000000\r\n", "text/parameters")
+        }
+        return empty(200, "OK")
+    }
+
+    private fun record(request: HttpRequest): HttpResponse {
+        DmrLog.i("airplay record from ${request.remoteIp} bytes=${request.body.size}")
+        return HttpResponse(
+            200,
+            "OK",
+            linkedMapOf(
+                "Audio-Latency" to "11025",
+                "Audio-Jack-Status" to "connected; type=analog",
+            ),
+        )
+    }
+
+    private fun teardown(request: HttpRequest): HttpResponse {
+        val parsed = plistDictionary(request.body)
+        val types = streamTypeList(parsed?.get("streams"))
+        val hex = if (request.body.size <= 80) {
+            AirPlayKeys.hex(request.body)
+        } else {
+            AirPlayKeys.hexPrefix(request.body, 32)
+        }
+        if (request.body.size == 42 && (parsed == null || parsed.isEmpty())) {
+            DmrLog.i("airplay teardown 42-byte body is an empty plist dict; full session teardown")
+        }
+        DmrLog.i(
+            "airplay teardown bytes=${request.body.size} types=${types.joinToString(",")} " +
+                "plist=${describePlist(parsed)} hex=$hex",
+        )
+        if (MirrorTeardown.stopsVideo(types)) {
+            DmrLog.i("airplay teardown closes the mirror")
+            mirror?.stop("teardown")
+        } else {
+            DmrLog.i("airplay teardown type 96 only; mirror stays open")
+        }
+        return HttpResponse(
+            200,
+            "OK",
+            linkedMapOf("Connection" to "close", "Content-Length" to "0"),
+        )
+    }
+
+    private fun streamTypeList(value: Any?): List<Long> {
+        val incoming = value as? List<*> ?: return emptyList()
+        val types = ArrayList<Long>()
+        for (item in incoming) {
+            val stream = item as? Map<*, *> ?: continue
+            val type = number(stream["type"]) ?: continue
+            types += type
+        }
+        return types
+    }
+
+    private fun describePlist(value: Any?, depth: Int = 0): String {
+        if (value == null) return "null"
+        if (depth > 4) return "…"
+        return when (value) {
+            is ByteArray -> "bytes=${value.size}"
+            is Map<*, *> -> value.entries.joinToString(prefix = "{", postfix = "}") { (key, item) ->
+                "$key=${describePlist(item, depth + 1)}"
+            }
+            is List<*> -> value.joinToString(prefix = "[", postfix = "]") { describePlist(it, depth + 1) }
+            is Boolean, is Number, is String -> value.toString()
+            else -> value.javaClass.simpleName
+        }
     }
 
     private fun rtspSimple(request: HttpRequest, name: String): HttpResponse {
@@ -495,5 +577,14 @@ class AirPlayHandler(
             "x-apple-purpose",
             "x-apple-hkp",
         )
+    }
+}
+
+/** Type 110 or a teardown with no stream list closes the mirror. Type 96 does not. */
+internal object MirrorTeardown {
+    fun stopsVideo(types: List<Long>): Boolean {
+        if (110L in types) return true
+        if (types.isEmpty()) return true
+        return types.any { it != 96L }
     }
 }
