@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0A0E17</color>
+    <color name="text">#F7F8FA</color>
+    <color name="muted">#8E99A8</color>
+    <color name="source">#C5CED8</color>
+    <color name="teal">#24FEC1</color>
+    <color name="blue">#2E7BF6</color>
+    <color name="danger">#FF5C6A</color>
+    <color name="pill">#1C2230</color>
+    <color name="ink">#0A0E17</color>
+    <color name="track">#33FFFFFF</color>
+    <color name="field">#141A26</color>
+    <color name="frosted_fill">#C01C2433</color>
+    <color name="frosted_stroke">#73FFFFFF</color>
+    <color name="frosted_fill_focused">#D6283348</color>
+    <color name="frosted_stroke_focused">#E6FFFFFF</color>
+    <color name="frosted_compact_fill">#401C2433</color>
+    <color name="frosted_compact_stroke">#40FFFFFF</color>
+</resources>

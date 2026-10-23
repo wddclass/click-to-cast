@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:clipChildren="false">
+
+    <View
+        android:layout_width="980dp"
+        android:layout_height="640dp"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="-80dp"
+        android:background="@drawable/bg_glow" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="48dp"
+        android:layout_marginTop="32dp"
+        android:text="@string/settings_title"
+        android:textColor="@color/muted"
+        android:textSize="16sp" />
+
+    <ScrollView
+        android:layout_width="560dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="center_horizontal"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:fillViewport="true"
+        android:paddingStart="16dp"
+        android:paddingTop="88dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="36dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/device_name_label"
+                android:textColor="@color/muted"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/name_input"
+                style="@style/Field"
+                android:layout_marginTop="8dp"
+                android:hint="@string/device_name_hint"
+                android:imeOptions="actionDone"
+                android:importantForAutofill="no"
+                android:inputType="text"
+                android:maxLength="32" />
+
+            <TextView
+                android:id="@+id/restore_name"
+                style="@style/Pill"
+                android:layout_marginTop="14dp"
+                android:text="@string/restore_name"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/auto_start"
+                style="@style/Pill"
+                android:layout_marginTop="28dp"
+                android:text="@string/auto_start_on" />
+
+            <TextView
+                android:id="@+id/always_net"
+                style="@style/Pill"
+                android:layout_marginTop="14dp"
+                android:text="@string/always_net_off" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                android:text="@string/ua_label"
+                android:textColor="@color/muted"
+                android:textSize="14sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="horizontal"
+                android:paddingStart="8dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="4dp">
+
+                <TextView
+                    android:id="@+id/ua_browser"
+                    style="@style/Pill"
+                    android:text="@string/ua_browser"
+                    android:textSize="15sp" />
+
+                <TextView
+                    android:id="@+id/ua_player"
+                    style="@style/Pill"
+                    android:layout_marginStart="10dp"
+                    android:text="@string/ua_player"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                android:text="@string/overlay_settings_title"
+                android:textColor="@color/muted"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/overlay_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/overlay_off"
+                android:textColor="@color/source"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/overlay_grant"
+                style="@style/Pill"
+                android:layout_marginTop="12dp"
+                android:text="@string/overlay_open"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/stop_service"
+                style="@style/Pill"
+                android:layout_marginTop="32dp"
+                android:text="@string/stop_service" />
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>
