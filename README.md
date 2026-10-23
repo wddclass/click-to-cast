@@ -19,14 +19,15 @@
 - 遥控器：上下键显示控制条。控制条显示时左右移动焦点；进度条获得焦点后左右才快进 10 秒。控制条隐藏时左右直接快进。倍速在按钮上方弹出，上下选择，OK 确认。音量键交给电视系统。返回先关掉倍速和控制条；控制条已经隐藏时，第一次返回在画面顶部提示「再按一次返回退出」，两秒内再按才退出。平板上可以拖动进度条，松手后才跳转。
 - 倍速：0.5、0.75、1、1.25、1.5、2。暂停后再播放会留在原来的位置和倍速；新的投屏会停掉上一个，并把倍速改回 1。直播不提供倍速，选了也会被拒绝。
 - 播放条在播放约 4 秒后自动隐藏，暂停、出错或打开倍速菜单时保持显示。点画面可以重新打开。控制条出现时，右上角显示当前下载速度（例如 2.3 MB/s），按播放器这一秒实际收到的网络字节计算。设置里打开「常显网速」后，控制条隐藏时也显示。
-- 直播（播放器判定为直播、HLS 播放列表没有 ENDLIST、已经就绪但没有正时长，或 DLNA 元数据时长为 0 / NOT_IMPLEMENTED 且播放器还没得到长度）会在进度原来的位置显示红点和 Live；控制条隐藏时改到左上角。进度条、时间和倍速都会藏起来，快进和倍速也不再生效。屏幕镜像仍未实现。
+- 直播（播放器判定为直播、HLS 播放列表没有 ENDLIST、已经就绪但没有正时长，或 DLNA 元数据时长为 0 / NOT_IMPLEMENTED 且播放器还没得到长度）会在进度原来的位置显示红点和 Live；控制条隐藏时改到左上角。进度条、时间和倍速都会藏起来，快进和倍速也不再生效。
+- 屏幕镜像：iPhone 的镜像数据经 FairPlay 解开后，用电视硬解 H.264 全屏播放。`TEARDOWN` 或返回键会关掉镜像画面。镜像音频（AAC-ELD / AAC-LC，stream type 96）会尝试解码；ALAC 只记录日志。NTP 定时包发往手机在 `SETUP` 里给出的 timing 端口。
 - 回到桌面后如果已经允许「显示在其他应用上层」，新的投屏会尝试自动打开播放画面；系统拦住时会有一条可点的通知。没有这个权限时，首页和设置里会说明怎么开。
 
 4K 和 HDR 走电视自己的硬解码。支持与否取决于固件和片源是否加密，应用不会强行软解。
 
 ## 在 TCL 雷鸟上安装
 
-目标机型参考：雷鸟鹏 6 SE（Amlogic T982，Android 11，界面 1920×1080）。安装包是通用 APK：没有只针对 64 位的原生库，32 位 `armeabi-v7a` 和 64 位系统都能装。
+目标机型参考：雷鸟鹏 6 SE（Amlogic T982，Android 11，界面 1920×1080）。安装包带 `armeabi-v7a` 和 `arm64-v8a` 的 playfair 原生库。雷鸟鹏 6 SE 是 32 位，必须装进含 `armeabi-v7a` 的包。
 
 这台电视的固件经常拦截 `adb install`（未授权、`INSTALL_FAILED_USER_RESTRICTED`，或根本没有稳定的调试端口）。不要依赖 adb，用 U 盘或浏览器。
 
@@ -58,7 +59,7 @@ export ANDROID_HOME=...
 ## 已知限制
 
 - DLNA / UPnP 之外，另有 AirPlay 视频地址播放。应用在每块 IPv4 网卡上直接向 `224.0.0.251:5353` 宣告 `_airplay._tcp` 和 `_raop._tcp`（TTL 255），并回答同网段的 mDNS 查询。IP 变化或改名后会先发 TTL 0 的 goodbye，再按新地址重新宣告。iPhone 的 `GET /info` 是 **RTSP/1.0**，响应是 `RTSP/1.0 200`、二进制 plist，`deviceID` / `pk` / `features`（`0x5A7FFFF7,0x1E` = `130367356919`，与 versionCode 6 相同，含屏幕位和音频位）/ `model=AppleTV3,2` / `sourceVersion` 与 mDNS TXT 一致。`pk` 是这台电视自己的 Ed25519 公钥。同一条 RTSP 连接会继续读下一条请求。手机把视频 URL POST 到 `/play` 后由同一播放器开播。`/reverse` 带 `Upgrade: PTTH/1.0` 时回 `101` 并保持连接。
-- iOS 26 在 `GET /info` 之后会发 `POST /pair-setup`，正文是 32 字节的 Ed25519 公钥。电视回自己的 32 字节公钥（和 mDNS / `/info` 里的 `pk` 是同一把），再完成 `pair-verify`（X25519 临时密钥 + Ed25519 签名，AES-128-CTR）。配对成功后，iOS 26 还会发 `POST /fp-setup`。16 字节的第一阶段按 mode 回 142 字节，164 字节的第二阶段回 12 字节头加请求最后 20 字节。接着的 `SETUP`（二进制 plist，stream type 110）回 `eventPort`、`timingPort` 和 `dataPort`；`RECORD`、`GET_PARAMETER`、`SET_PARAMETER` 回 200。Safari、照片、YouTube 的视频地址仍走明文 `POST /play`。这不是 HomeKit SRP，也没有 ChaCha20-Poly1305。`features` 仍是 versionCode 6 的 `0x5A7FFFF7,0x1E`。镜像的 AES 密钥解开在 UxPlay 的 GPL `playfair/omg_hax.c` 里，没有移植，所以屏幕镜像解不出画面。RAOP 只做发现，不传 RTP 音频。logcat 标签 `ClickToCast`。
+- iOS 26 在 `GET /info` 之后会发 `POST /pair-setup`，正文是 32 字节的 Ed25519 公钥。电视回自己的 32 字节公钥（和 mDNS / `/info` 里的 `pk` 是同一把），再完成 `pair-verify`（X25519 临时密钥 + Ed25519 签名，AES-128-CTR）。配对成功后，iOS 26 还会发 `POST /fp-setup`。16 字节的第一阶段按 mode 回 142 字节，164 字节的第二阶段回 12 字节头加请求最后 20 字节。接着的 `SETUP`（二进制 plist，stream type 110）回 `eventPort`、`timingPort` 和 `dataPort`；`RECORD`、`GET_PARAMETER`、`SET_PARAMETER` 回 200。Safari、照片、YouTube 的视频地址仍走明文 `POST /play`。这不是 HomeKit SRP，也没有 ChaCha20-Poly1305。`features` 仍是 versionCode 6 的 `0x5A7FFFF7,0x1E`。屏幕镜像会调用随包附带的 GPL playfair（`playfair_decrypt`）解开 `ekey`，再按 UxPlay 的 SHA-512（`aeskey` 与 pair-verify 的 X25519 共享密钥，然后是 `AirPlayStreamKey` / `AirPlayStreamIV` 加 `streamConnectionID`）得到 AES-128-CTR 密钥，解密 128 字节头后面的 H.264。`TEARDOWN` 关闭镜像画面。logcat 标签 `ClickToCast`。RAOP 音频只做 type 96 的 UDP 接收，AAC-ELD / AAC-LC 会尝试硬解。
 - Miracast、Chromecast、乐播 / 乐联私有协议仍未实现。
 - 爱奇艺、优酷、腾讯视频、Bilibili 的部分版本只走私有协议，或者地址带短时签名和 DRM。它们走标准 DLNA 时可以被发现；走私有协议时列表里不会出现本应用，或者给出地址后无法播放。
 - 不转码。编码、封装或 DRM 电视硬解不了，就会直接失败。
@@ -87,6 +88,6 @@ export ANDROID_HOME=...
 
 ## 许可证
 
-原创代码采用 [Apache License 2.0](LICENSE)。
+本项目自带 UxPlay / RPiPlay 的 playfair 源码，因此整体采用 [GNU GPL-3.0-only](LICENSE)。版权人已把原先的 Apache-2.0 代码改授为 GPL-3.0-only，以便合法包含这些文件。
 
-界面和协议实现都是按 DLNA / UPnP 规范另写的，没有使用 GPL 代码。AndroidX Media3 沿用其自身的 Apache-2.0 许可。
+AndroidX Media3 与 BouncyCastle 仍按它们各自的 Apache-2.0 许可使用，可以和 GPL-3.0 一起分发。详见 `THIRD_PARTY_NOTICES.md`。

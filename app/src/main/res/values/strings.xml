@@ -34,7 +34,10 @@
     <string name="history_replay_started">正在重播</string>
     <string name="about_title">关于</string>
     <string name="about_body">投屏点我是电视上的 DLNA 接收端。手机里的视频 App 把播放地址发给电视，电视用自己的播放器打开。没有账号，没有广告，也不会把观看记录发到外面。</string>
-    <string name="about_limits">DLNA 投屏可用。AirPlay 会完成配对和 fp-setup，再用 /play 接视频地址。屏幕镜像的 FairPlay 密钥这一版解不了。乐播私有协议和带 DRM 的片源仍不支持。</string>
+    <string name="about_limits">DLNA 投屏可用。AirPlay 视频地址和屏幕镜像都可以接。镜像用本机的 H.264 解码。乐播私有协议和带 DRM 的片源仍不支持。</string>
+    <string name="mirror_status">正在接收屏幕镜像</string>
+    <string name="mirror_title">屏幕镜像</string>
+    <string name="mirror_key_failed">镜像密钥解开失败</string>
     <string name="about_version">版本 %1$s</string>
     <string name="back">返回</string>
     <string name="play_pause">播放或暂停</string>

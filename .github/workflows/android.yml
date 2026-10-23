@@ -30,7 +30,7 @@ jobs:
         with:
           # The action default is "tools platform-tools". The legacy "tools" package
           # was removed from the SDK repository, so sdkmanager exits 1 before the build.
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018 cmake;3.22.1"
           log-accepted-android-sdk-licenses: false
 
       - name: Unit tests and release APK

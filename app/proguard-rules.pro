@@ -10,3 +10,4 @@
 -keep class org.bouncycastle.crypto.** { *; }
 -keep class org.bouncycastle.math.** { *; }
 -keep class org.bouncycastle.util.** { *; }
+-keep class com.wddclass.clicktocast.airplay.PlayfairNative { *; }

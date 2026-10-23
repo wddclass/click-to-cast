@@ -15,6 +15,8 @@ class AirPlayPairing(private val keys: AirPlayKeys) {
     private val lock = Any()
     private val pending = HashMap<String, VerifyState>()
     private val setupKeys = HashMap<String, ByteArray>()
+    private val secrets = HashMap<String, ByteArray>()
+    private var latestSecret: ByteArray? = null
     private val verified = HashSet<String>()
 
     fun isVerified(remoteIp: String): Boolean = synchronized(lock) { remoteIp in verified }
@@ -42,7 +44,7 @@ class AirPlayPairing(private val keys: AirPlayKeys) {
         val signature = keys.sign(serverX + clientX)
         val encrypted = AirPlayKeys.ctr(aesKey, aesIv, 0, signature)
         synchronized(lock) {
-            pending[remoteIp] = VerifyState(clientEd, clientX, serverX, aesKey, aesIv)
+            pending[remoteIp] = VerifyState(clientEd, clientX, serverX, aesKey, aesIv, shared)
         }
         return serverX + encrypted
     }
@@ -60,8 +62,15 @@ class AirPlayPairing(private val keys: AirPlayKeys) {
         synchronized(lock) {
             pending.remove(remoteIp)
             verified.add(remoteIp)
+            secrets[remoteIp] = state.shared.copyOf()
+            latestSecret = state.shared.copyOf()
         }
         return ByteArray(0)
+    }
+
+    /** X25519 shared secret from the last successful pair-verify, used to mix the mirror AES key. */
+    fun ecdhSecret(remoteIp: String): ByteArray? = synchronized(lock) {
+        secrets[remoteIp]?.copyOf() ?: latestSecret?.copyOf()
     }
 
     fun clientSetupKey(remoteIp: String): ByteArray? = synchronized(lock) { setupKeys[remoteIp]?.copyOf() }
@@ -78,5 +87,6 @@ class AirPlayPairing(private val keys: AirPlayKeys) {
         val serverX: ByteArray,
         val aesKey: ByteArray,
         val aesIv: ByteArray,
+        val shared: ByteArray,
     )
 }

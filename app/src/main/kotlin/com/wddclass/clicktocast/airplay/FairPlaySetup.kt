@@ -5,9 +5,8 @@ package com.wddclass.clicktocast.airplay
  *
  * Phase 1 is a 16-byte request; byte 14 selects one of four 142-byte replies.
  * Phase 2 is a 164-byte request; the reply is a 12-byte header plus the last
- * 20 bytes of the request. This does not unwrap the session key. That step is
- * `playfair_decrypt` in UxPlay/RPiPlay (`playfair/omg_hax.c`), which is GPL and
- * is not included here.
+ * 20 bytes of the request. Unwrapping the ekey is `playfair_decrypt` in the
+ * bundled GPL playfair library (`app/src/main/cpp/playfair`).
  *
  * The four replies are the well-known FairPlay interop constants. They are
  * Apple-derived. Kotlin here is original. See THIRD_PARTY_NOTICES.md.

@@ -60,10 +60,11 @@ class AirPlayHandler(
     private val sink: AirPlaySink,
     private val keys: AirPlayKeys,
     private val eventPort: () -> Int = { 8192 },
+    private val mirror: MirrorSession? = null,
 ) {
     private val pairing = AirPlayPairing(keys)
-    private val ports = AirPlayPorts()
-    private var fairPlayKeyBytes = 0
+    private val ports = AirPlayPorts(mirror)
+    private var fairPlayMessage: ByteArray? = null
     fun handle(request: HttpRequest): HttpResponse? {
         val response = dispatch(request)
         if (response == null && !shouldLog(request)) return null
@@ -82,7 +83,10 @@ class AirPlayHandler(
             "GET_PARAMETER" -> return parameter(request, read = true)
             "SET_PARAMETER" -> return parameter(request, read = false)
             "FLUSH" -> return rtspSimple(request, "flush")
-            "TEARDOWN" -> return rtspSimple(request, "teardown")
+            "TEARDOWN" -> {
+                mirror?.stop("teardown")
+                return rtspSimple(request, "teardown")
+            }
             "ANNOUNCE" -> return rtspSimple(request, "announce")
         }
         return dispatchPath(request)
@@ -141,7 +145,7 @@ class AirPlayHandler(
         DmrLog.i(
             "airplay no handler for ${request.method} ${request.path} from ${request.remoteIp} " +
                 "verified=${pairing.isVerified(request.remoteIp)} hex=${AirPlayKeys.hexPrefix(request.body, 24)}; " +
-                "fp-setup and SETUP are implemented; FairPlay stream decrypt is not",
+                "fp-setup, SETUP and mirror decrypt are implemented",
         )
         return empty(501, "Not Implemented")
     }
@@ -251,12 +255,10 @@ class AirPlayHandler(
             return empty(400, "Bad Request")
         }
         if (request.body.size >= 164) {
-            fairPlayKeyBytes = request.body.size
-            DmrLog.i(
-                "airplay fp-setup phase 2 reply=${reply.size}; keymsg stored. " +
-                    "playfair_decrypt is not included, so an ekey cannot be unwrapped",
-            )
+            fairPlayMessage = request.body.copyOf(164)
+            DmrLog.i("airplay fp-setup phase 2 reply=${reply.size}; keymsg=164 stored for playfair_decrypt")
         } else {
+            fairPlayMessage = null
             DmrLog.i("airplay fp-setup phase 1 mode=$mode reply=${reply.size}")
         }
         return octets(reply)
@@ -282,15 +284,27 @@ class AirPlayHandler(
         }
         val ekey = parsed["ekey"] as? ByteArray
         val eiv = parsed["eiv"] as? ByteArray
+        val message = fairPlayMessage
+        val clientTiming = number(parsed["timingPort"])?.toInt() ?: 0
         DmrLog.i(
             "airplay SETUP from ${request.remoteIp} keys=${parsed.keys.joinToString(",")} " +
-                "ekey=${ekey?.size ?: 0} eiv=${eiv?.size ?: 0} fairPlayKeymsg=$fairPlayKeyBytes " +
-                "timing=${ports.timingPort} data=${ports.dataPort} event=$events",
+                "ekey=${ekey?.size ?: 0} eiv=${eiv?.size ?: 0} keymsg=${message?.size ?: 0} " +
+                "clientTiming=$clientTiming timing=${ports.timingPort} data=${ports.dataPort} " +
+                "audio=${ports.audioPort} event=$events",
         )
-        if (ekey != null) {
-            DmrLog.i("airplay SETUP ekey present; FairPlay key unwrap and H.264 decrypt are not in this build")
+        val rawKey = unwrapKey(ekey, message)
+        val secret = pairing.ecdhSecret(request.remoteIp)
+        DmrLog.i("airplay ecdh ${if (secret == null) "absent" else "present"} rawKey=${rawKey?.size ?: 0}")
+        if (rawKey == null && ekey != null) {
+            mirror?.fail("镜像密钥解开失败")
         }
-        val streams = streamReplies(parsed["streams"])
+        val streams = streamReplies(parsed["streams"]) { type, id, ct ->
+            if (rawKey == null) return@streamReplies
+            when (type) {
+                110L -> mirror?.armVideo(rawKey, secret, id, request.remoteIp, clientTiming)
+                96L -> mirror?.armAudio(rawKey, secret, eiv, ct)
+            }
+        }
         val reply = linkedMapOf<String, Any>(
             "eventPort" to events,
             "timingPort" to ports.timingPort,
@@ -305,29 +319,49 @@ class AirPlayHandler(
         )
     }
 
-    private fun streamReplies(value: Any?): List<Map<String, Any>> {
+    private fun unwrapKey(ekey: ByteArray?, message: ByteArray?): ByteArray? {
+        if (ekey == null) return null
+        if (ekey.size == 16) {
+            DmrLog.i("airplay ekey is already 16 bytes")
+            return ekey.copyOf()
+        }
+        if (ekey.size < 72 || message == null || message.size < 164) {
+            DmrLog.i("airplay ekey=${ekey.size} keymsg=${message?.size ?: 0} cannot call playfair_decrypt")
+            return null
+        }
+        val unwrapped = PlayfairNative.decrypt(message, ekey)
+        DmrLog.i("airplay playfair_decrypt ekey=${ekey.size} result=${unwrapped?.size ?: 0}")
+        return unwrapped
+    }
+
+    private fun streamReplies(value: Any?, onStream: (Long, Long, Int) -> Unit): List<Map<String, Any>> {
         val incoming = (value as? List<*>) ?: emptyList<Any?>()
         val replies = ArrayList<Map<String, Any>>()
         for (item in incoming) {
             val stream = item as? Map<*, *> ?: continue
             val type = number(stream["type"]) ?: continue
+            val id = number(stream["streamConnectionID"]) ?: 0L
+            val ct = number(stream["ct"])?.toInt() ?: 0
+            val dataPort = if (type == 96L && ports.audioPort > 0) ports.audioPort else ports.dataPort
             val reply = linkedMapOf<String, Any>(
                 "type" to type,
-                "dataPort" to ports.dataPort,
+                "dataPort" to dataPort,
             )
-            number(stream["streamConnectionID"])?.let { reply["streamConnectionID"] = it }
-            if (type == 96L) reply["controlPort"] = ports.timingPort
+            if (id != 0L) reply["streamConnectionID"] = id
+            if (type == 96L && ports.audioControlPort > 0) reply["controlPort"] = ports.audioControlPort
             val kind = when (type) {
                 110L -> "mirror"
                 96L -> "audio"
                 else -> "other"
             }
-            DmrLog.i("airplay SETUP stream type=$type ($kind)")
+            DmrLog.i("airplay SETUP stream type=$type ($kind) id=$id ct=$ct data=$dataPort")
+            onStream(type, id, ct)
             replies += reply
         }
         if (replies.isEmpty()) {
             replies += linkedMapOf("type" to 110L, "dataPort" to ports.dataPort)
             DmrLog.i("airplay SETUP had no streams; replying with type 110 data port")
+            onStream(110L, 0L, 0)
         }
         return replies
     }

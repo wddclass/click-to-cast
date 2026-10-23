@@ -1,3 +1,4 @@
+// Project license: GPL-3.0-only. See /LICENSE and THIRD_PARTY_NOTICES.md.
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -11,9 +12,21 @@ android {
         applicationId = "com.wddclass.clicktocast"
         minSdk = 23
         targetSdk = 35
-        versionCode = 10
+        versionCode = 11
         versionName = "0.1.0"
         vectorDrawables.useSupportLibrary = true
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
+    }
+
+    ndkVersion = "27.2.12479018"
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     compileOptions {

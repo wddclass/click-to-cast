@@ -73,6 +73,13 @@
             android:launchMode="singleTop"
             android:screenOrientation="landscape" />
 
+        <activity
+            android:name=".ui.MirrorActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|smallestScreenSize|screenLayout|uiMode|density"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="landscape" />
+
         <service
             android:name=".service.CastReceiverService"
             android:exported="false"

@@ -23,6 +23,8 @@ import com.wddclass.clicktocast.airplay.AirPlayHandler
 import com.wddclass.clicktocast.airplay.AirPlayIdentity
 import com.wddclass.clicktocast.airplay.AirPlayKeys
 import com.wddclass.clicktocast.airplay.AirPlayTexts
+import com.wddclass.clicktocast.airplay.MirrorSession
+import com.wddclass.clicktocast.ui.MirrorActivity
 import com.wddclass.clicktocast.airplay.RendererAirPlaySink
 import com.wddclass.clicktocast.R
 import com.wddclass.clicktocast.dlna.DeviceProfile
@@ -94,6 +96,7 @@ class CastReceiverService : Service() {
     private lateinit var ssdp: SsdpAdvertiser
     private lateinit var airplayMdns: AirPlayAdvertiser
     private lateinit var airplayKeys: AirPlayKeys
+    private lateinit var mirrorSession: MirrorSession
     private var audio: AudioManager? = null
     private var multicast: WifiManager.MulticastLock? = null
     private var httpPort = Upnp.PREFERRED_PORT
@@ -142,11 +145,13 @@ class CastReceiverService : Service() {
         appliedMuted = muted
         renderer.adoptVolume(percent, muted, echo = false)
         airplayKeys = AirPlayKeys.fromSeed(AirPlayKeys.seedFor(settings.deviceUuid))
+        mirrorSession = MirrorSession(this) { openMirror() }
         val airplay = AirPlayHandler(
             { airplayIdentity() },
             RendererAirPlaySink(renderer),
             airplayKeys,
             eventPort = { httpPort },
+            mirror = mirrorSession,
         )
         http = MiniHttpServer { request ->
             airplay.handle(request)
@@ -171,6 +176,7 @@ class CastReceiverService : Service() {
         if (::airplayMdns.isInitialized) airplayMdns.stop()
         if (::ssdp.isInitialized) ssdp.stop()
         if (::http.isInitialized) http.stop()
+        if (::mirrorSession.isInitialized) mirrorSession.release()
         if (::playerBackend.isInitialized) playerBackend.release()
         try {
             multicast?.release()
@@ -244,6 +250,19 @@ class CastReceiverService : Service() {
             DmrLog.i("open player failed: ${error.javaClass.simpleName}")
         }
         postArrival(title, intent)
+    }
+
+    private fun openMirror() {
+        val intent = Intent(this, MirrorActivity::class.java).addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+        )
+        DmrLog.i("open mirror overlay=${canDrawOverlays()}")
+        try {
+            startActivity(intent)
+        } catch (error: Exception) {
+            DmrLog.i("open mirror failed: ${error.javaClass.simpleName}")
+        }
+        postArrival(getString(R.string.mirror_title), intent)
     }
 
     private fun playerIntent(): Intent = Intent(this, PlayerActivity::class.java).addFlags(
