@@ -64,8 +64,7 @@ class CastHistory(context: Context) {
     }
 
     fun add(record: CastRecord) {
-        val next = (listOf(record) + list()).take(40)
-        write(next)
+        write(mergeHistory(list(), record))
     }
 
     fun updateSession(session: Long, outcome: String, quality: String) {
@@ -116,4 +115,10 @@ class CastHistory(context: Context) {
         private const val PREFS = "clicktocast_history"
         private const val KEY = "items"
     }
+}
+
+/** Same http(s) URL updates the existing row and moves it to the top. */
+internal fun mergeHistory(existing: List<CastRecord>, record: CastRecord, limit: Int = 40): List<CastRecord> {
+    val rest = if (record.canReplay) existing.filterNot { it.uri == record.uri } else existing
+    return (listOf(record) + rest).take(limit)
 }

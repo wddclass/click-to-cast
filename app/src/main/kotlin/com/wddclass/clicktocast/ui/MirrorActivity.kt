@@ -1,10 +1,12 @@
 package com.wddclass.clicktocast.ui
 
 import android.os.Bundle
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.TextView
 import com.wddclass.clicktocast.R
 import com.wddclass.clicktocast.airplay.MirrorSession
@@ -16,10 +18,12 @@ class MirrorActivity : TvActivity() {
         setContentView(R.layout.activity_mirror)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val status = findViewById<TextView>(R.id.mirror_status)
+        val surfaceView = findViewById<SurfaceView>(R.id.mirror_surface)
         val session = MirrorSession.active
         session?.bindStatus(status)
         session?.onPresented = { status.post { status.visibility = android.view.View.GONE } }
-        findViewById<SurfaceView>(R.id.mirror_surface).holder.addCallback(object : SurfaceHolder.Callback {
+        session?.onSized = { width, height -> surfaceView.post { fitSurface(surfaceView, width, height) } }
+        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 MirrorSession.active?.setSurface(holder.surface)
             }
@@ -30,6 +34,29 @@ class MirrorActivity : TvActivity() {
                 MirrorSession.active?.clearSurface()
             }
         })
+    }
+
+    private fun fitSurface(view: SurfaceView, videoWidth: Int, videoHeight: Int) {
+        val parent = view.parent as? FrameLayout ?: return
+        val screenW = parent.width
+        val screenH = parent.height
+        if (screenW <= 0 || screenH <= 0 || videoWidth <= 0 || videoHeight <= 0) return
+        val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
+        val screenAspect = screenW.toFloat() / screenH.toFloat()
+        val width: Int
+        val height: Int
+        if (videoAspect > screenAspect) {
+            width = screenW
+            height = (screenW / videoAspect).toInt()
+        } else {
+            height = screenH
+            width = (screenH * videoAspect).toInt()
+        }
+        val params = view.layoutParams as FrameLayout.LayoutParams
+        params.width = width
+        params.height = height
+        params.gravity = Gravity.CENTER
+        view.layoutParams = params
     }
 
     override fun onStart() {

@@ -18,9 +18,9 @@
 - 前台服务常驻，可开机自启，回到桌面后仍然可被发现。
 - 遥控器：上下键显示控制条。控制条显示时左右移动焦点；进度条获得焦点后左右才快进 10 秒。控制条隐藏时左右直接快进。倍速在按钮上方弹出，上下选择，OK 确认。音量键交给电视系统。返回先关掉倍速和控制条；控制条已经隐藏时，第一次返回在画面顶部提示「再按一次返回退出」，两秒内再按才退出。平板上可以拖动进度条，松手后才跳转。
 - 倍速：0.5、0.75、1、1.25、1.5、2。暂停后再播放会留在原来的位置和倍速；新的投屏会停掉上一个，并把倍速改回 1。直播不提供倍速，选了也会被拒绝。
-- 播放条在播放约 4 秒后自动隐藏，暂停、出错或打开倍速菜单时保持显示。点画面可以重新打开。控制条出现时，右上角显示当前下载速度（例如 2.3 MB/s），按播放器这一秒实际收到的网络字节计算。设置里打开「常显网速」后，控制条隐藏时也显示。常显时的胶囊更小：12sp、8dp 圆角，贴在右上角。
+- 播放条在播放约 4 秒后自动隐藏，暂停、出错或打开倍速菜单时保持显示。点画面可以重新打开。控制条出现时，右上角显示当前下载速度（例如 2.3 MB/s），按播放器这一秒实际收到的网络字节计算。设置里打开「常显网速」后，控制条隐藏时也显示。常显胶囊是 14sp、10dp 圆角，底色更透。
 - 直播（播放器判定为直播、HLS 播放列表没有 ENDLIST、已经就绪但没有正时长，或 DLNA 元数据时长为 0 / NOT_IMPLEMENTED 且播放器还没得到长度）只在控制条出现时，于进度原来的位置显示红点和 Live。控制条隐藏后，直播标记也一起消失。进度条、时间和倍速都会藏起来，快进和倍速也不再生效。右上角网速是磨砂玻璃胶囊（`bg_frosted`）：Android 12 及以上会模糊底板，Android 11 用半透明底和细边。之后的胶囊沿用这一套。常显网速用更紧的 `bg_frosted_compact`。
-- 屏幕镜像：iPhone 先发不带 streams 的 `SETUP`（`ekey` / `eiv`，常带 `isScreenMirroringSession` 和 `combinedGetInfoWithControlSetup`）。电视只回 `timingPort` 和 `eventPort` 0，不编造 type 110。随后的 `GET /info`（没有 qualifier）带 `statusFlags` 68、1920×1080 的 `displays`，以及 type 100/101 的音频格式。下一次 `SETUP` 才带 type 110，可以走另一条 TCP、用会话 URL，这时才开全屏 H.264。拆 type 96 音频时画面留着；type 110 或没有指定流的 `TEARDOWN`、以及返回键，才会关掉画面。镜像音频（AAC-ELD / AAC-LC）会尝试解码；ALAC 只记录日志。NTP 从第一次 `SETUP` 的 timing 端口开始发。
+- 屏幕镜像：iPhone 先发不带 streams 的 `SETUP`（`ekey` / `eiv`，常带 `isScreenMirroringSession` 和 `combinedGetInfoWithControlSetup`）。电视只回 `timingPort` 和 `eventPort` 0，不编造 type 110。随后的 `GET /info`（没有 qualifier）带 `statusFlags` 68、1920×1080 的 `displays`，以及 type 100/101 的音频格式。下一次 `SETUP` 才带 type 110，可以走另一条 TCP、用会话 URL，这时才开全屏 H.264。加密视频按连续 AES-CTR 解开（byte 5 为 0x10 的是 IDR，不重置计数器），SPS/PPS 接到下一帧前面，长度前缀改成 Annex-B 再送进解码器。byte 4 为 5 的是每秒一次的传输报告，不解密。竖屏画面按比例居中。拆 type 96 音频时画面留着；type 110 或没有指定流的 `TEARDOWN`、以及返回键，才会关掉画面。镜像音频（AAC-ELD / AAC-LC）会尝试解码；ALAC 只记录日志。NTP 从第一次 `SETUP` 的 timing 端口开始发。
 - 回到桌面后如果已经允许「显示在其他应用上层」，新的投屏会尝试自动打开播放画面；系统拦住时会有一条可点的通知。没有这个权限时，首页和设置里会说明怎么开。
 
 4K 和 HDR 走电视自己的硬解码。支持与否取决于固件和片源是否加密，应用不会强行软解。
@@ -73,7 +73,7 @@ export ANDROID_HOME=...
 - 空的 `CurrentURIMetaData`、`NOT_IMPLEMENTED`、未转义的 DIDL，以及 `Expect: 100-continue` / chunked 请求都按可选元数据处理。发现应答覆盖 `ssdp:all`，并在每块 IPv4 网卡上以 TTL 2 发送 3 次 NOTIFY。IPv6 链路组播同样宣告。M-SEARCH 的单播回复从绑定 1900 的套接字发回发送方的 ip:port，随机延迟不超过 800ms。设备描述带 `presentationURL`、PNG 图标、`dlna:X_DLNADOC`（DMR-1.50）和 `dlna:X_DLNACAP`。`SERVER` 使用逗号分隔，和 Platinum / redsonic 一样。出厂名仍是「投屏点我」，和电视自带的 redsonic / hpplay 分开。
 - 每次 M-SEARCH（来源 ip:port、ST）和每条回复都会打在 logcat 标签 `ClickToCast` 下。
 - 雷鸟鹏 6 SE（Android 11）上，versionCode 2 已经能被 Bilibili 通过 SSDP 发现，并且 `SetAVTransportURI` / `Play` / `Pause` / `Seek` 返回 HTTP 200。AirPlay 宣告、控制中心列表、设置页光晕和投屏记录重播还要在装上更新的包之后再看。4K/HDR 和长时间播放仍未在这台电视上验收。
-- 投屏记录里，带 http(s) 地址的新记录可以用遥控器选中后按 OK 重播，请求头只用当时存下来的那些。更早的记录没有地址，行内会写「不能重播，没有保存播放地址」。
+- 投屏记录里，带 http(s) 地址的新记录可以用遥控器选中后按 OK 重播，请求头只用当时存下来的那些。同一地址再播（包括从记录里重播）会更新原来那一行的时间并把它挪到最上面，不会再插一条。更早的记录没有地址，行内会写「不能重播，没有保存播放地址」。
 
 ## 协议说明
 

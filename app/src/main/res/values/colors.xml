@@ -15,4 +15,6 @@
     <color name="frosted_stroke">#73FFFFFF</color>
     <color name="frosted_fill_focused">#D6283348</color>
     <color name="frosted_stroke_focused">#E6FFFFFF</color>
+    <color name="frosted_compact_fill">#401C2433</color>
+    <color name="frosted_compact_stroke">#40FFFFFF</color>
 </resources>

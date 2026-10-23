@@ -8,13 +8,10 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.view.Surface
+import android.view.View
 import android.widget.TextView
 import com.wddclass.clicktocast.dlna.DmrLog
 import com.wddclass.clicktocast.ui.MirrorActivity
-import org.bouncycastle.crypto.engines.AESEngine
-import org.bouncycastle.crypto.modes.SICBlockCipher
-import org.bouncycastle.crypto.params.KeyParameter
-import org.bouncycastle.crypto.params.ParametersWithIV
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -42,6 +39,7 @@ class MirrorSession(
     @Volatile private var statusText = "正在接收屏幕镜像"
     @Volatile private var statusView: TextView? = null
     @Volatile var onPresented: (() -> Unit)? = null
+    @Volatile var onSized: ((Int, Int) -> Unit)? = null
 
     private var timingSocket: DatagramSocket? = null
     private var timingRunning = false
@@ -52,7 +50,7 @@ class MirrorSession(
     private var opened = false
     private var presented = false
 
-    private var videoCipher: ContinualCtr? = null
+    @Volatile private var videoCipher: MirrorCtr? = null
     private var videoCodec: MediaCodec? = null
     private var audioCodec: MediaCodec? = null
     private var audioKey: ByteArray? = null
@@ -65,7 +63,12 @@ class MirrorSession(
     private var width = 1920
     private var height = 1080
     private var pendingPrefix: ByteArray? = null
-    private var latestFrame: ByteArray? = null
+    private val pendingFrames = ArrayDeque<PendingFrame>()
+    private var nalRejects = 0
+    private var fedFrames = 0
+    private var outputPolls = 0
+    private var outputLogs = 0
+    private var reportLogs = 0
     private var videoSocket: Socket? = null
 
     init {
@@ -91,11 +94,7 @@ class MirrorSession(
             "airplay mirror video stream=$streamConnectionId ecdh=${ecdhSecret != null} " +
                 "keyPrefix=${AirPlayKeys.hex(key).take(8)} ivPrefix=${AirPlayKeys.hex(iv).take(8)}",
         )
-        decode.post {
-            videoCipher = ContinualCtr(key, iv)
-            latestFrame = null
-            pendingPrefix = null
-        }
+        videoCipher = MirrorCtr(key, iv)
         startTiming(remoteIp, clientTimingPort)
         show()
     }
@@ -245,7 +244,9 @@ class MirrorSession(
             sps = null
             pps = null
             pendingPrefix = null
-            latestFrame = null
+            pendingFrames.clear()
+            nalRejects = 0
+            fedFrames = 0
         }
         MirrorActivity.finishActive()
     }
@@ -259,14 +260,22 @@ class MirrorSession(
     private fun onVideo(header: MirrorPackets.Header, payload: ByteArray) {
         if (!alive) return
         when (header.type) {
-            0 -> onEncryptedVideo(payload)
+            0 -> onEncryptedVideo(header, payload)
             1 -> onCodec(header, payload)
-            2, 5 -> Unit
+            // UxPlay: byte 4 == 5 is an unencrypted streaming report, once a second.
+            // It is not HEVC and must not be run through the video AES-CTR counter.
+            5 -> {
+                reportLogs++
+                if (reportLogs <= 3 || reportLogs % 30 == 0) {
+                    DmrLog.i("airplay mirror type 5 streaming report bytes=${payload.size} (not video)")
+                }
+            }
+            2 -> Unit
             else -> DmrLog.i("airplay mirror unused type=${header.type}")
         }
     }
 
-    private fun onEncryptedVideo(payload: ByteArray) {
+    private fun onEncryptedVideo(header: MirrorPackets.Header, payload: ByteArray) {
         val cipher = videoCipher
         if (cipher == null) {
             DmrLog.i("airplay mirror video packet before AES key")
@@ -280,16 +289,28 @@ class MirrorSession(
         }
         val annex = MirrorPackets.toAnnexB(plain)
         if (annex == null) {
+            nalRejects++
             DmrLog.i(
-                "airplay mirror nal rejected bytes=${plain.size} head=${AirPlayKeys.hexPrefix(plain, 8)}",
+                "airplay mirror nal rejected ${MirrorPackets.annexProblem(plain)} " +
+                    "bytes=${plain.size} option=${header.option} head=${AirPlayKeys.hexPrefix(plain, 16)}",
             )
+            if (nalRejects == 3) showStatus("镜像画面解不开")
             return
         }
+        nalRejects = 0
         val prefix = pendingPrefix
-        val frame = if (prefix != null) prefix + annex else annex
+        val bytes = if (prefix != null) prefix + annex else annex
         pendingPrefix = null
-        latestFrame = frame
-        queueVideo(frame)
+        val idr = header.option == 0x10 || MirrorPackets.nalTypes(annex).split(',').any { it == "5" }
+        if (fedFrames < 8 || idr) {
+            DmrLog.i(
+                "airplay mirror decrypted bytes=${plain.size} nals=${MirrorPackets.nalTypes(bytes)} " +
+                    "idr=$idr option=${header.option} prepended=${prefix != null}",
+            )
+        }
+        pendingFrames.addLast(PendingFrame(bytes, idr))
+        while (pendingFrames.size > 60) pendingFrames.removeFirst()
+        flushPending()
     }
 
     private fun onCodec(header: MirrorPackets.Header, payload: ByteArray) {
@@ -297,13 +318,28 @@ class MirrorSession(
         if (header.height >= 16) height = header.height
         val sets = MirrorPackets.extractH264(payload)
         if (sets == null) {
-            DmrLog.i("airplay mirror codec packet is not H.264 bytes=${payload.size}")
+            val marker = if (payload.size >= 8) AirPlayKeys.hexPrefix(payload, 8) else ""
+            DmrLog.i("airplay mirror codec packet is not H.264 bytes=${payload.size} head=$marker")
+            showStatus("这份镜像不是 H.264")
             return
+        }
+        val parsed = H264Sps.displaySize(sets.first)
+        if (parsed != null) {
+            DmrLog.i(
+                "airplay mirror sps size ${parsed.first}x${parsed.second} " +
+                    "header ${header.width}x${header.height} display ${header.displayWidth}x${header.displayHeight}",
+            )
+            width = parsed.first
+            height = parsed.second
         }
         sps = sets.first
         pps = sets.second
+        pendingFrames.clear()
         pendingPrefix = MirrorPackets.annex(sets.first) + MirrorPackets.annex(sets.second)
-        DmrLog.i("airplay mirror sps=${sets.first.size} pps=${sets.second.size} ${width}x$height")
+        DmrLog.i(
+            "airplay mirror sps=${sets.first.size} pps=${sets.second.size} ${width}x$height " +
+                "spsHex=${AirPlayKeys.hexPrefix(sets.first, 12)}",
+        )
         releaseVideoCodec()
         startVideoCodec()
     }
@@ -331,31 +367,89 @@ class MirrorSession(
             decoder.configure(format, target, null, 0)
             decoder.start()
             videoCodec = decoder
-            DmrLog.i("airplay mirror H.264 decoder started ${width}x$height")
-            latestFrame?.let { queueVideo(it) }
+            outputPolls = 0
+            DmrLog.i("airplay mirror H.264 decoder started ${width}x$height queued=${pendingFrames.size}")
+            onSized?.invoke(width, height)
+            flushPending()
+            drain(decoder, video = true)
+            scheduleOutput()
         } catch (error: Throwable) {
-            DmrLog.i("airplay mirror decoder failed: ${error.javaClass.simpleName} ${error.message}")
-            statusText = "镜像解码失败"
-            statusView?.post { statusView?.text = statusText }
+            val extra = if (error is MediaCodec.CodecException) " diagnostic=${error.diagnosticInfo}" else ""
+            DmrLog.i("airplay mirror decoder failed: ${error.javaClass.simpleName} ${error.message}$extra")
+            showStatus("镜像解码失败")
         }
     }
 
-    private fun queueVideo(frame: ByteArray) {
+    private fun flushPending() {
         val decoder = videoCodec ?: return
-        try {
-            val index = decoder.dequeueInputBuffer(5_000)
-            if (index < 0) return
-            val buffer = decoder.getInputBuffer(index) ?: return
-            buffer.clear()
-            if (frame.size > buffer.capacity()) {
-                DmrLog.i("airplay mirror frame ${frame.size} exceeds input ${buffer.capacity()}")
-                return
-            }
-            buffer.put(frame)
-            decoder.queueInputBuffer(index, 0, frame.size, System.nanoTime() / 1000L, 0)
+        var guard = 0
+        while (pendingFrames.isNotEmpty() && guard++ < 12) {
+            val frame = pendingFrames.first()
+            if (!enqueue(decoder, frame)) return
+            pendingFrames.removeFirst()
             drain(decoder, video = true)
+        }
+    }
+
+    private fun enqueue(decoder: MediaCodec, frame: PendingFrame): Boolean {
+        return try {
+            val index = decoder.dequeueInputBuffer(20_000)
+            if (index < 0) {
+                DmrLog.i("airplay mirror input not ready bytes=${frame.bytes.size} idr=${frame.idr}")
+                false
+            } else {
+                val buffer = decoder.getInputBuffer(index)
+                if (buffer == null) {
+                    decoder.queueInputBuffer(index, 0, 0, 0, 0)
+                    false
+                } else if (frame.bytes.size > buffer.capacity()) {
+                    DmrLog.i("airplay mirror frame ${frame.bytes.size} exceeds input ${buffer.capacity()}")
+                    decoder.queueInputBuffer(index, 0, 0, 0, 0)
+                    true
+                } else {
+                    buffer.clear()
+                    buffer.put(frame.bytes)
+                    val flags = if (frame.idr) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+                    decoder.queueInputBuffer(index, 0, frame.bytes.size, fedFrames * 33_333L, flags)
+                    fedFrames++
+                    if (fedFrames <= 8) {
+                        DmrLog.i(
+                            "airplay mirror queued bytes=${frame.bytes.size} flags=$flags fed=$fedFrames",
+                        )
+                    }
+                    true
+                }
+            }
         } catch (error: Throwable) {
-            DmrLog.i("airplay mirror queue failed: ${error.message}")
+            val extra = if (error is MediaCodec.CodecException) " diagnostic=${error.diagnosticInfo}" else ""
+            DmrLog.i("airplay mirror queue failed: ${error.javaClass.simpleName} ${error.message}$extra")
+            showStatus("镜像解码失败")
+            false
+        }
+    }
+
+    private fun scheduleOutput() {
+        decode.postDelayed({
+            if (!alive || presented) return@postDelayed
+            val decoder = videoCodec ?: return@postDelayed
+            drain(decoder, video = true)
+            flushPending()
+            outputPolls++
+            if (!presented && outputPolls < 50) {
+                scheduleOutput()
+            } else if (!presented && fedFrames > 0) {
+                DmrLog.i("airplay mirror no output after $outputPolls polls fed=$fedFrames")
+                showStatus("镜像没有画面")
+            }
+        }, 40)
+    }
+
+    private fun showStatus(message: String) {
+        statusText = message
+        DmrLog.i("airplay mirror status: $message")
+        statusView?.post {
+            statusView?.visibility = View.VISIBLE
+            statusView?.text = message
         }
     }
 
@@ -419,17 +513,40 @@ class MirrorSession(
 
     private fun drain(decoder: MediaCodec, video: Boolean) {
         val info = MediaCodec.BufferInfo()
-        while (true) {
-            val index = decoder.dequeueOutputBuffer(info, 0)
-            if (index >= 0) {
-                decoder.releaseOutputBuffer(index, video)
-                if (video && !presented && info.size > 0) {
-                    presented = true
-                    DmrLog.i("airplay mirror first frame")
-                    onPresented?.invoke()
+        while (alive) {
+            val index = try {
+                decoder.dequeueOutputBuffer(info, if (video) 8_000 else 0)
+            } catch (error: Throwable) {
+                val extra = if (error is MediaCodec.CodecException) " diagnostic=${error.diagnosticInfo}" else ""
+                DmrLog.i("airplay mirror dequeue failed: ${error.javaClass.simpleName} ${error.message}$extra")
+                if (video) showStatus("镜像解码失败")
+                return
+            }
+            when {
+                index >= 0 -> {
+                    val render = video && info.size > 0
+                    decoder.releaseOutputBuffer(index, render)
+                    outputLogs++
+                    if (video && (outputLogs <= 6 || info.size == 0)) {
+                        DmrLog.i(
+                            "airplay mirror output index=$index size=${info.size} flags=${info.flags} render=$render",
+                        )
+                    }
+                    if (render && !presented) {
+                        presented = true
+                        DmrLog.i("airplay mirror first frame")
+                        statusView?.post { statusView?.visibility = View.GONE }
+                        onPresented?.invoke()
+                    }
                 }
-            } else {
-                break
+                index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    DmrLog.i("airplay mirror output format ${decoder.outputFormat}")
+                }
+                index == MediaCodec.INFO_TRY_AGAIN_LATER -> return
+                else -> {
+                    DmrLog.i("airplay mirror dequeue index=$index")
+                    return
+                }
             }
         }
     }
@@ -530,20 +647,7 @@ class MirrorSession(
         return out
     }
 
-    private class ContinualCtr(key: ByteArray, iv: ByteArray) {
-        private val cipher = SICBlockCipher(AESEngine())
-
-        init {
-            cipher.init(true, ParametersWithIV(KeyParameter(key.copyOf(16)), iv.copyOf(16)))
-        }
-
-        fun decrypt(input: ByteArray): ByteArray {
-            if (input.isEmpty()) return input
-            val out = ByteArray(input.size)
-            cipher.processBytes(input, 0, input.size, out, 0)
-            return out
-        }
-    }
+    private data class PendingFrame(val bytes: ByteArray, val idr: Boolean)
 
     companion object {
         @Volatile
