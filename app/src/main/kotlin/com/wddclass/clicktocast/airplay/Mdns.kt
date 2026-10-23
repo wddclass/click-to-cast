@@ -137,6 +137,32 @@ object Mdns {
 
     fun questionNames(packet: ByteArray): List<String> = parseQuery(packet)?.questions?.map { it.name }.orEmpty()
 
+    /** True when a response carries an answer with TTL 0, the mDNS goodbye. */
+    fun hasGoodbye(packet: ByteArray): Boolean {
+        if (packet.size < 12) return false
+        if (u16(packet, 2) and 0x8000 == 0) return false
+        val questions = u16(packet, 4)
+        val answers = u16(packet, 6)
+        if (answers <= 0 || questions > 16 || answers > 32) return false
+        var cursor = 12
+        repeat(questions) {
+            val name = readName(packet, cursor) ?: return false
+            cursor = name.end + 4
+            if (cursor > packet.size) return false
+        }
+        repeat(answers) {
+            val name = readName(packet, cursor) ?: return false
+            cursor = name.end
+            if (cursor + 10 > packet.size) return false
+            val ttl = u32(packet, cursor + 4)
+            val length = u16(packet, cursor + 8)
+            if (ttl == 0L) return true
+            cursor += 10 + length
+            if (cursor > packet.size) return false
+        }
+        return false
+    }
+
     /** TTL of every answer, authority, and additional record. Empty when the packet is truncated. */
     fun recordTtls(packet: ByteArray): List<Long> {
         if (packet.size < 12) return emptyList()

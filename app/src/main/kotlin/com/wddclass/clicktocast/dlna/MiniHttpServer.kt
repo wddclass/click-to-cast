@@ -10,6 +10,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class HttpRequest(
     val method: String,
@@ -19,6 +20,7 @@ class HttpRequest(
     val remoteIp: String,
     val query: String = "",
     val protocol: String = "HTTP/1.1",
+    val connectionId: Long = 0,
 ) {
     fun header(name: String): String? = headers[name.lowercase()]
 }
@@ -56,8 +58,10 @@ class HttpResponse(
 
 /** Small HTTP/1.1 server. One request per connection, enough for UPnP control and events. */
 class MiniHttpServer(
+    private val onRtspClosed: (connectionId: Long, remoteIp: String, reason: String) -> Unit = { _, _, _ -> },
     private val handler: (HttpRequest) -> HttpResponse,
 ) {
+    private val connectionIds = AtomicLong(1)
     private val running = AtomicBoolean(false)
     private var socket: ServerSocket? = null
     private val workers = Executors.newFixedThreadPool(8) { runnable ->
@@ -138,31 +142,61 @@ class MiniHttpServer(
     private fun handleClient(client: Socket) {
         client.soTimeout = 8_000
         val remote = client.inetAddress?.hostAddress ?: ""
+        val connectionId = connectionIds.getAndIncrement()
         val input = BufferedInputStream(client.getInputStream())
         val output = client.getOutputStream()
-        while (true) {
-            val request = try {
-                readRequest(input, remote) {
-                    output.write(CONTINUE)
-                    output.flush()
+        var rtsp = false
+        var closeReason = "eof"
+        try {
+            while (true) {
+                val request = try {
+                    readRequest(input, remote, connectionId) {
+                        output.write(CONTINUE)
+                        output.flush()
+                    }
+                } catch (_: SocketTimeoutException) {
+                    closeReason = "timeout"
+                    break
+                } ?: break
+                if (request.protocol.startsWith("RTSP", ignoreCase = true)) rtsp = true
+                val response = try {
+                    handler(request)
+                } catch (error: Throwable) {
+                    DmrLog.i("http handler failed: ${error.javaClass.simpleName}: ${error.message}")
+                    HttpResponse(500, "Internal Server Error", emptyMap(), "error".toByteArray())
                 }
-            } catch (_: SocketTimeoutException) {
-                break
-            } ?: break
-            val response = try {
-                handler(request)
-            } catch (error: Throwable) {
-                DmrLog.i("http handler failed: ${error.javaClass.simpleName}: ${error.message}")
-                HttpResponse(500, "Internal Server Error", emptyMap(), "error".toByteArray())
+                output.write(response.toBytes(request.protocol))
+                output.flush()
+                if (response.status == 101) {
+                    holdUntilClose(client, input)
+                    closeReason = "reverse closed"
+                    break
+                }
+                if (shouldClose(request, response)) {
+                    closeReason = "close"
+                    break
+                }
+                client.soTimeout = if (request.protocol.startsWith("RTSP", ignoreCase = true)) 30_000 else 8_000
             }
-            output.write(response.toBytes(request.protocol))
-            output.flush()
-            if (response.status == 101) {
-                holdUntilClose(client, input)
-                break
+        } catch (error: Throwable) {
+            val message = error.message.orEmpty()
+            closeReason = if (message.contains("reset", ignoreCase = true) ||
+                message.contains("broken", ignoreCase = true)
+            ) {
+                "reset"
+            } else {
+                "error"
             }
-            if (shouldClose(request, response)) break
-            client.soTimeout = if (request.protocol.startsWith("RTSP", ignoreCase = true)) 30_000 else 8_000
+            DmrLog.i("http connection $connectionId ended: ${error.javaClass.simpleName}: $message")
+        } finally {
+            if (rtsp) {
+                DmrLog.i("airplay rtsp closed id=$connectionId from $remote reason=$closeReason")
+                try {
+                    onRtspClosed(connectionId, remote, closeReason)
+                } catch (error: Throwable) {
+                    DmrLog.i("airplay rtsp close hook failed: ${error.message}")
+                }
+            }
         }
     }
 
@@ -201,7 +235,12 @@ class MiniHttpServer(
         }
     }
 
-    private fun readRequest(input: InputStream, remoteIp: String, onContinue: () -> Unit): HttpRequest? {
+    private fun readRequest(
+        input: InputStream,
+        remoteIp: String,
+        connectionId: Long,
+        onContinue: () -> Unit,
+    ): HttpRequest? {
         val requestLine = readLine(input) ?: return null
         val parts = requestLine.split(' ')
         if (parts.size < 2) return null
@@ -225,7 +264,7 @@ class MiniHttpServer(
         }
         val (path, query) = splitTarget(parts[1])
         val protocol = if (parts.size >= 3 && parts[2].isNotBlank()) parts[2] else "HTTP/1.1"
-        return HttpRequest(parts[0].uppercase(), path, headers, body, remoteIp, query, protocol)
+        return HttpRequest(parts[0].uppercase(), path, headers, body, remoteIp, query, protocol, connectionId)
     }
 
     private fun splitTarget(target: String): Pair<String, String> {

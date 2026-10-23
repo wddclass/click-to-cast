@@ -488,6 +488,45 @@ class AirPlayTest {
         assertEquals(0x0B, compressedReply[1].toInt() and 0xFF)
         assertEquals(0x84, compressedReply[2].toInt() and 0xFF)
         assertEquals(listOf("_airplay._tcp.local"), Mdns.questionNames(compressed))
+        assertFalse(Mdns.hasGoodbye(query))
+        assertTrue(Mdns.hasGoodbye(gone[0]))
+        assertTrue(Mdns.hasGoodbye(goodbyeAnswer()))
+        assertFalse(Mdns.hasGoodbye(goodbyeAnswer(ttl = 120)))
+        assertFalse(Mdns.hasGoodbye(ByteArray(8)))
+    }
+
+    private fun goodbyeAnswer(ttl: Long = 0L): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        fun u16(value: Int) {
+            out.write(value shr 8)
+            out.write(value)
+        }
+        fun u32(value: Long) {
+            out.write((value shr 24).toInt())
+            out.write((value shr 16).toInt())
+            out.write((value shr 8).toInt())
+            out.write(value.toInt())
+        }
+        u16(0)
+        u16(0x8400)
+        u16(1)
+        u16(1)
+        u16(0)
+        u16(0)
+        out.write(1)
+        out.write('a'.code)
+        out.write(0)
+        u16(1)
+        u16(1)
+        out.write(1)
+        out.write('a'.code)
+        out.write(0)
+        u16(1)
+        u16(1)
+        u32(ttl)
+        u16(4)
+        out.write(byteArrayOf(192.toByte(), 168.toByte(), 1, 1))
+        return out.toByteArray()
     }
 
     private fun compressedQuery(id: Int): ByteArray {

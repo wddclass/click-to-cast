@@ -60,8 +60,19 @@ class MirrorSession(
     private var surface: Surface? = null
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
-    private var width = 1920
-    private var height = 1080
+    @Volatile private var width = 1920
+    @Volatile private var height = 1080
+    @Volatile private var clientName = ""
+    @Volatile private var peerIp = ""
+    @Volatile private var controlConnection = 0L
+    @Volatile private var openedAt = 0L
+    @Volatile private var lastVideoAt = 0L
+    @Volatile private var lastFeedbackAt = 0L
+    @Volatile private var lastTimingAt = 0L
+    @Volatile private var bytesPerSecond = 0L
+    private var sessionClosed = false
+    private var byteWindow = 0L
+    private var windowStart = 0L
     private var pendingPrefix: ByteArray? = null
     private val pendingFrames = ArrayDeque<PendingFrame>()
     private var nalRejects = 0
@@ -95,8 +106,79 @@ class MirrorSession(
                 "keyPrefix=${AirPlayKeys.hex(key).take(8)} ivPrefix=${AirPlayKeys.hex(iv).take(8)}",
         )
         videoCipher = MirrorCtr(key, iv)
+        synchronized(gate) {
+            sessionClosed = false
+            openedAt = System.currentTimeMillis()
+            lastVideoAt = 0L
+            lastFeedbackAt = 0L
+            lastTimingAt = 0L
+            byteWindow = 0L
+            windowStart = 0L
+            bytesPerSecond = 0L
+        }
+        if (remoteIp.isNotBlank()) peerIp = remoteIp
         startTiming(remoteIp, clientTimingPort)
         show()
+        startWatch()
+    }
+
+    fun noteClientName(name: String) {
+        val shown = name.trim()
+        if (shown.isEmpty()) return
+        clientName = shown
+        DmrLog.i("airplay mirror client name=$shown")
+    }
+
+    fun noteControl(connectionId: Long, remoteIp: String) {
+        if (remoteIp.isNotBlank()) peerIp = remoteIp
+        if (connectionId == 0L) return
+        synchronized(gate) {
+            val next = MirrorEnd.nextControl(controlConnection, connectionId, sessionClosed)
+            if (next != controlConnection) {
+                controlConnection = next
+                DmrLog.i("airplay mirror control connection id=$next from $remoteIp")
+            } else if (connectionId != controlConnection) {
+                DmrLog.i(
+                    "airplay mirror keeps control id=$controlConnection " +
+                        "(ignored id=$connectionId from $remoteIp)",
+                )
+            }
+        }
+    }
+
+    fun noteFeedback() {
+        lastFeedbackAt = System.currentTimeMillis()
+    }
+
+    fun controlClosed(connectionId: Long, remoteIp: String, reason: String) {
+        if (reason == "timeout" && mediaFresh()) {
+            DmrLog.i("airplay rtsp timeout id=$connectionId from $remoteIp ignored; mirror still receiving")
+            return
+        }
+        val open = opened || videoSocket != null
+        if (!MirrorEnd.controlClosed(controlConnection, connectionId, open)) {
+            DmrLog.i(
+                "airplay rtsp closed id=$connectionId from $remoteIp reason=$reason " +
+                    "ignored (control=$controlConnection open=$open)",
+            )
+            return
+        }
+        stop("rtsp $reason from $remoteIp")
+    }
+
+    fun mdnsGoodbye(remoteIp: String) {
+        if (!opened) return
+        if (!MirrorEnd.samePeer(peerIp, remoteIp)) {
+            DmrLog.i("airplay mdns goodbye from $remoteIp ignored (peer=$peerIp)")
+            return
+        }
+        stop("mdns goodbye from $remoteIp")
+    }
+
+    fun chrome(): Triple<String, String, Long> {
+        val name = clientName.ifBlank { "iPhone" }
+        val size = if (width >= 16 && height >= 16) "${width}×${height}" else ""
+        return Triple(name, size, bytesPerSecond)
     }
 
     /** NTP toward the phone. The mirror view stays closed until a type 110 stream arrives. */
@@ -163,6 +245,7 @@ class MirrorSession(
                     "hex=${AirPlayKeys.hexPrefix(packet, 8)}",
             )
         }
+        lastTimingAt = System.currentTimeMillis()
         if (packet.size >= 8 && packet[0] == 0x80.toByte() && (packet[1].toInt() and 0xFF) == 0xD2) {
             val now = System.currentTimeMillis() * 1_000_000L
             DmrLog.i("airplay timing reply d3 to ${address.hostAddress}:$port")
@@ -175,23 +258,54 @@ class MirrorSession(
         val remote = socket.inetAddress?.hostAddress ?: "?"
         DmrLog.i("airplay mirror connected from $remote")
         videoSocket = socket
+        if (remote.isNotBlank() && remote != "?") peerIp = remote
+        var why = "data eof"
+        val token = sessionToken
         try {
             socket.tcpNoDelay = true
             socket.keepAlive = true
-            socket.soTimeout = 0
+            socket.soTimeout = 15_000
             val input = socket.getInputStream()
-            val token = sessionToken
+            var armedTimeout = false
             while (alive && token == sessionToken) {
-                val headerBytes = readFully(input, 128) ?: break
-                val header = MirrorPackets.header(headerBytes) ?: break
+                val headerBytes = try {
+                    readFully(input, 128)
+                } catch (timeout: java.net.SocketTimeoutException) {
+                    if (feedbackFresh()) {
+                        DmrLog.i("airplay mirror data quiet from $remote; feedback still live")
+                        continue
+                    }
+                    why = "data idle"
+                    DmrLog.i("airplay mirror data idle from $remote")
+                    break
+                }
+                if (headerBytes == null) {
+                    why = "data eof"
+                    break
+                }
+                val header = MirrorPackets.header(headerBytes)
+                if (header == null) {
+                    why = "data bad header"
+                    break
+                }
                 if (header.payloadSize < 0 || header.payloadSize > 8_000_000) {
                     DmrLog.i("airplay mirror bad payload ${header.payloadSize}")
+                    why = "data bad payload"
                     break
                 }
                 val payload = if (header.payloadSize == 0) {
                     ByteArray(0)
                 } else {
-                    readFully(input, header.payloadSize) ?: break
+                    readFully(input, header.payloadSize)
+                }
+                if (payload == null) {
+                    why = "data eof"
+                    break
+                }
+                noteBytes(128 + payload.size)
+                if (!armedTimeout) {
+                    armedTimeout = true
+                    socket.soTimeout = 5_000
                 }
                 videoLogs++
                 if (videoLogs <= 6 || header.type != 0 || videoLogs % 120 == 0) {
@@ -204,15 +318,81 @@ class MirrorSession(
                 val body = payload
                 decode.post { onVideo(captured, body) }
             }
+        } catch (timeout: java.net.SocketTimeoutException) {
+            why = "data idle"
+            DmrLog.i("airplay mirror data idle from $remote")
         } catch (error: Throwable) {
-            if (alive) DmrLog.i("airplay mirror socket ended: ${error.message}")
+            val message = error.message.orEmpty()
+            why = if (
+                message.contains("reset", ignoreCase = true) ||
+                message.contains("broken", ignoreCase = true) ||
+                message.contains("abort", ignoreCase = true)
+            ) {
+                "data reset"
+            } else {
+                "data error"
+            }
+            if (alive) DmrLog.i("airplay mirror socket ended: ${error.javaClass.simpleName}: $message")
         } finally {
-            DmrLog.i("airplay mirror socket closed from $remote")
+            DmrLog.i("airplay mirror socket closed from $remote why=$why")
             try {
                 socket.close()
             } catch (_: Throwable) {
             }
             if (videoSocket == socket) videoSocket = null
+            if (token == sessionToken) stop(why)
+        }
+    }
+
+    private fun feedbackFresh(): Boolean {
+        val seen = lastFeedbackAt
+        return seen > 0L && System.currentTimeMillis() - seen < MirrorEnd.IDLE_MS
+    }
+
+    private fun mediaFresh(): Boolean {
+        val now = System.currentTimeMillis()
+        val videoFresh = lastVideoAt > 0L && now - lastVideoAt < MirrorEnd.IDLE_MS
+        return videoFresh || feedbackFresh()
+    }
+
+    private fun noteBytes(count: Int) {
+        val now = System.currentTimeMillis()
+        lastVideoAt = now
+        byteWindow += count
+        if (windowStart == 0L) windowStart = now
+        val elapsed = now - windowStart
+        if (elapsed >= 1_000L) {
+            bytesPerSecond = byteWindow * 1_000L / elapsed
+            byteWindow = 0L
+            windowStart = now
+        }
+    }
+
+    private fun startWatch() {
+        val token = sessionToken
+        Thread({
+            while (alive && token == sessionToken) {
+                try {
+                    Thread.sleep(1_000L)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (token != sessionToken || !opened) continue
+                val why = MirrorEnd.reason(
+                    System.currentTimeMillis(),
+                    openedAt,
+                    lastVideoAt,
+                    lastFeedbackAt,
+                    lastTimingAt,
+                )
+                if (why != null) {
+                    stop(why)
+                    break
+                }
+            }
+        }, "airplay-mirror-watch").apply {
+            isDaemon = true
+            start()
         }
     }
 
@@ -225,9 +405,14 @@ class MirrorSession(
     }
 
     fun stop(reason: String) {
-        if (!alive) return
-        if (reason == "service") alive = false
-        sessionToken++
+        if (!alive && reason != "service") return
+        synchronized(gate) {
+            if (reason == "service") alive = false
+            if (sessionClosed && reason != "service") return
+            sessionClosed = true
+            sessionToken++
+            controlConnection = 0L
+        }
         timingRunning = false
         timingThread?.interrupt()
         timingThread = null
@@ -248,7 +433,7 @@ class MirrorSession(
             nalRejects = 0
             fedFrames = 0
         }
-        MirrorActivity.finishActive()
+        if (reason != "service") MirrorActivity.finishActive()
     }
 
     fun release() {

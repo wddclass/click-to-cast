@@ -21,6 +21,7 @@ import java.net.SocketTimeoutException
 class AirPlayAdvertiser(
     private val port: () -> Int,
     private val identity: () -> AirPlayIdentity,
+    private val onPacket: (ByteArray, String) -> Unit = { _, _ -> },
 ) {
     @Volatile private var running = false
     private var worker: Thread? = null
@@ -171,6 +172,11 @@ class AirPlayAdvertiser(
         }
         val data = packet.data.copyOf(packet.length)
         val peer = SsdpReply.ipv4Literal(packet.address) ?: packet.address?.hostAddress.orEmpty()
+        try {
+            onPacket(data, peer)
+        } catch (error: Throwable) {
+            DmrLog.i("airplay mdns packet hook failed: ${error.message}")
+        }
         val ipv4 = NetworkAddresses.preferredHost(peer, nics.map { it.ipv4 }, nics.first().ipv4)
         val ad = Mdns.advertisement(who.name, who.deviceId, listen, ipv4, who.publicKeyHex)
         val reply = Mdns.response(data, ad) ?: return

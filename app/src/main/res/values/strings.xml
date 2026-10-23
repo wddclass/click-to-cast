@@ -37,6 +37,8 @@
     <string name="about_limits">DLNA 投屏可用。AirPlay 视频地址和屏幕镜像都可以接。镜像用本机的 H.264 解码。乐播私有协议和带 DRM 的片源仍不支持。</string>
     <string name="mirror_status">正在接收屏幕镜像</string>
     <string name="mirror_title">屏幕镜像</string>
+    <string name="mirror_live">正在镜像 · %1$s</string>
+    <string name="mirror_end">结束镜像</string>
     <string name="mirror_key_failed">镜像密钥解开失败</string>
     <string name="about_version">版本 %1$s</string>
     <string name="back">返回</string>

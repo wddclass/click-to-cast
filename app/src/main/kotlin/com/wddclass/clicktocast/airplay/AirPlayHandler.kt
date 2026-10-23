@@ -70,6 +70,7 @@ class AirPlayHandler(
     private var sessionPath: String = ""
     private var clientTimingPort: Int = 0
     fun handle(request: HttpRequest): HttpResponse? {
+        touchMirror(request)
         val response = dispatch(request)
         if (response == null && !shouldLog(request)) return null
         val line = response?.let { "${protocolName(request)} ${it.status} body=${it.body.size}" } ?: "not handled"
@@ -307,6 +308,8 @@ class AirPlayHandler(
         val clientTiming = number(parsed["timingPort"])?.toInt() ?: 0
         if (clientTiming > 0) clientTimingPort = clientTiming
         if (eiv != null) sessionIv = eiv.copyOf()
+        val clientName = parsed["name"] as? String
+        if (!clientName.isNullOrBlank()) mirror?.noteClientName(clientName)
         DmrLog.i(
             "airplay SETUP from ${request.remoteIp} path=${request.path} " +
                 "ekey=${ekey?.size ?: 0} eiv=${eiv?.size ?: 0} keymsg=${message?.size ?: 0} " +
@@ -451,14 +454,15 @@ class AirPlayHandler(
             DmrLog.i("airplay teardown 42-byte body is an empty plist dict; full session teardown")
         }
         DmrLog.i(
-            "airplay teardown bytes=${request.body.size} types=${types.joinToString(",")} " +
+            "airplay teardown id=${request.connectionId} from ${request.remoteIp} " +
+                "bytes=${request.body.size} types=${types.joinToString(",")} " +
                 "plist=${describePlist(parsed)} hex=$hex",
         )
         if (MirrorTeardown.stopsVideo(types)) {
-            DmrLog.i("airplay teardown closes the mirror")
-            mirror?.stop("teardown")
+            DmrLog.i("airplay teardown closes the mirror id=${request.connectionId}")
+            mirror?.stop("teardown id=${request.connectionId}")
         } else {
-            DmrLog.i("airplay teardown type 96 only; mirror stays open")
+            DmrLog.i("airplay teardown type 96 only; mirror stays open id=${request.connectionId}")
         }
         return HttpResponse(
             200,
@@ -595,6 +599,21 @@ class AirPlayHandler(
         linkedMapOf("Content-Type" to "text/x-apple-plist+xml"),
         body.toByteArray(Charsets.UTF_8),
     )
+
+    /** SETUP/RECORD/feedback mark the long-lived control socket. HTTP /feedback only refreshes the clock. */
+    private fun touchMirror(request: HttpRequest) {
+        if (request.path == "/feedback") mirror?.noteFeedback()
+        if (!request.protocol.startsWith("RTSP", ignoreCase = true)) return
+        val sessionMethod = request.method == "SETUP" ||
+            request.method == "RECORD" ||
+            request.method == "TEARDOWN" ||
+            request.method == "GET_PARAMETER" ||
+            request.method == "SET_PARAMETER" ||
+            request.method == "FLUSH" ||
+            request.path == "/feedback"
+        if (!sessionMethod) return
+        mirror?.noteControl(request.connectionId, request.remoteIp)
+    }
 
     private fun empty(status: Int, reason: String): HttpResponse =
         HttpResponse(status, reason, linkedMapOf("Content-Length" to "0"))

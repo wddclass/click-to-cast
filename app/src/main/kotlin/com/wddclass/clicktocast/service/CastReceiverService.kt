@@ -23,6 +23,7 @@ import com.wddclass.clicktocast.airplay.AirPlayHandler
 import com.wddclass.clicktocast.airplay.AirPlayIdentity
 import com.wddclass.clicktocast.airplay.AirPlayKeys
 import com.wddclass.clicktocast.airplay.AirPlayTexts
+import com.wddclass.clicktocast.airplay.Mdns
 import com.wddclass.clicktocast.airplay.MirrorSession
 import com.wddclass.clicktocast.ui.MirrorActivity
 import com.wddclass.clicktocast.airplay.RendererAirPlaySink
@@ -153,14 +154,19 @@ class CastReceiverService : Service() {
             eventPort = { httpPort },
             mirror = mirrorSession,
         )
-        http = MiniHttpServer { request ->
-            airplay.handle(request)
-                ?: RendererHttpHandler(renderer, { currentProfile() }, events).handle(request)
-        }
+        http = MiniHttpServer(
+            handler = { request ->
+                airplay.handle(request)
+                    ?: RendererHttpHandler(renderer, { currentProfile() }, events).handle(request)
+            },
+            onRtspClosed = { id, remote, reason -> mirrorSession.controlClosed(id, remote, reason) },
+        )
         httpPort = http.start(Upnp.PREFERRED_PORT)
         ssdp = SsdpAdvertiser(profileProvider = { currentProfile() }, configId = { configId })
         ssdp.start()
-        airplayMdns = AirPlayAdvertiser({ httpPort }, { airplayIdentity() })
+        airplayMdns = AirPlayAdvertiser({ httpPort }, { airplayIdentity() }) { packet, from ->
+            if (Mdns.hasGoodbye(packet)) mirrorSession.mdnsGoodbye(from)
+        }
         airplayMdns.start()
         refreshAddress()
         main.post(ticker)
