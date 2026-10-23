@@ -11,6 +11,7 @@ class FakePlayer : PlayerBackend {
     var request: PlaybackRequest? = null
     var position: Long = 5_000
     var duration: Long = 90_000
+    var live = false
     val seeks = mutableListOf<Long>()
     private var snap = PlaybackSnapshot()
 
@@ -44,7 +45,7 @@ class FakePlayer : PlayerBackend {
         playbackSpeed = speed
     }
 
-    override fun snapshot(): PlaybackSnapshot = snap.copy(positionMs = position, durationMs = duration)
+    override fun snapshot(): PlaybackSnapshot = snap.copy(positionMs = position, durationMs = duration, live = live)
 
     fun fail(message: String) {
         snap = snap.copy(playback = EnginePlayback.ERROR, error = message)
@@ -192,6 +193,53 @@ class DlnaRendererTest {
         assertTrue(transport.calls[0].contains("NO_MEDIA_PRESENT") || transport.calls[0].contains("LastChange"))
         assertTrue(events.unsubscribe(result.sid))
         assertFalse(events.unsubscribe(result.sid))
+    }
+
+    @Test
+    fun liveMetadataRejectsSpeedAndSeek() {
+        player.duration = -1L
+        val set = renderer.handleAv(
+            "SetAVTransportURI",
+            mapOf(
+                "InstanceID" to "0",
+                "CurrentURI" to "http://cdn.example/live.m3u8",
+                "CurrentURIMetaData" to """<DIDL-Lite><item><res duration="NOT_IMPLEMENTED">http://cdn.example/live.m3u8</res></item></DIDL-Lite>""",
+            ),
+            null,
+        )
+        assertEquals(200, set.httpStatus)
+        assertEquals(200, renderer.handleAv("Play", mapOf("Speed" to "1"), null).httpStatus)
+        assertTrue(renderer.snapshot().live)
+        assertFalse(renderer.setLocalSpeed(1.5))
+        assertEquals(1f, player.playbackSpeed)
+        val seek = renderer.handleAv("Seek", mapOf("Unit" to "REL_TIME", "Target" to "00:00:10"), null)
+        assertEquals(500, seek.httpStatus)
+        assertTrue(seek.body.contains(">710<"))
+        assertTrue(player.seeks.isEmpty())
+        val actions = renderer.handleAv("GetCurrentTransportActions", emptyMap(), null)
+        assertFalse(actions.body.contains("Seek"))
+    }
+
+    @Test
+    fun positiveDurationClearsMetadataLiveAndEngineLiveRejectsSpeed() {
+        player.duration = 90_000
+        renderer.handleAv(
+            "SetAVTransportURI",
+            mapOf(
+                "InstanceID" to "0",
+                "CurrentURI" to "http://cdn.example/vod.mp4",
+                "CurrentURIMetaData" to """<res duration="0"></res>""",
+            ),
+            null,
+        )
+        assertFalse(renderer.snapshot().live)
+        assertTrue(renderer.setLocalSpeed(1.25))
+        player.live = true
+        renderer.onEngineUpdate(player.snapshot())
+        assertTrue(renderer.snapshot().live)
+        assertEquals("1", renderer.snapshot().speed)
+        assertEquals(1f, player.playbackSpeed)
+        assertFalse(renderer.setLocalSpeed(1.5))
     }
 }
 

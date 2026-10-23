@@ -1,8 +1,11 @@
 package com.wddclass.clicktocast.player
 
 import android.content.Context
+import android.net.TrafficStats
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -10,13 +13,19 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.hls.HlsManifest
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import com.wddclass.clicktocast.dlna.EnginePlayback
+import com.wddclass.clicktocast.dlna.LiveSignals
 import com.wddclass.clicktocast.dlna.MediaKind
 import com.wddclass.clicktocast.dlna.PlaybackMessages
 import com.wddclass.clicktocast.dlna.PlaybackRequest
@@ -45,7 +54,36 @@ class ExoPlayerBackend(
     @Volatile
     private var rate = 1f
 
+    private val bandwidth = DefaultBandwidthMeter.Builder(appContext).build()
+    private val throughput = Throughput()
+    private val transfer = object : TransferListener {
+        override fun onTransferInitializing(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {
+            bandwidth.onTransferInitializing(source, dataSpec, isNetwork)
+        }
+
+        override fun onTransferStart(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {
+            bandwidth.onTransferStart(source, dataSpec, isNetwork)
+        }
+
+        override fun onBytesTransferred(
+            source: DataSource,
+            dataSpec: DataSpec,
+            isNetwork: Boolean,
+            bytesTransferred: Int,
+        ) {
+            bandwidth.onBytesTransferred(source, dataSpec, isNetwork, bytesTransferred)
+            if (isNetwork && bytesTransferred > 0) throughput.add(bytesTransferred)
+        }
+
+        override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {
+            bandwidth.onTransferEnd(source, dataSpec, isNetwork)
+        }
+    }
+
     val player: ExoPlayer
+
+    /** Bytes per second read by the player. Falls back to this app's receive delta while playing. */
+    fun downloadBytesPerSecond(): Long = throughput.sample(playerIsActive())
 
     init {
         val trackSelector = DefaultTrackSelector(appContext).apply {
@@ -64,6 +102,7 @@ class ExoPlayerBackend(
         player = ExoPlayer.Builder(appContext)
             .setRenderersFactory(renderers)
             .setTrackSelector(trackSelector)
+            .setBandwidthMeter(bandwidth)
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .setWakeMode(C.WAKE_MODE_NETWORK)
@@ -95,6 +134,7 @@ class ExoPlayerBackend(
         val token = generation.incrementAndGet()
         playRequested.set(false)
         rate = 1f
+        throughput.reset()
         main.post {
             if (token != generation.get()) return@post
             player.stop()
@@ -147,6 +187,14 @@ class ExoPlayerBackend(
     }
 
     override fun setSpeed(speed: Float) {
+        if (cached.live) {
+            rate = 1f
+            main.post {
+                player.setPlaybackSpeed(1f)
+                publish()
+            }
+            return
+        }
         rate = speed.coerceIn(0.5f, 2f)
         main.post {
             player.setPlaybackSpeed(rate)
@@ -172,6 +220,7 @@ class ExoPlayerBackend(
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(15_000)
                 .setReadTimeoutMs(20_000)
+                .setTransferListener(transfer)
             val item = MediaItem.Builder()
                 .setUri(request.uri)
                 .setMediaMetadata(MediaMetadata.Builder().setTitle(request.title).build())
@@ -208,17 +257,83 @@ class ExoPlayerBackend(
             else -> EnginePlayback.IDLE
         }
         val duration = player.duration
+        val durationMs = if (duration == C.TIME_UNSET || duration < 0) -1L else duration
+        val playlist = (player.currentManifest as? HlsManifest)?.mediaPlaylist
+        val hlsLoaded = playlist != null
+        val hlsOpen = hlsLoaded && playlist.hasEndTag == false
+        val ready = player.playbackState == Player.STATE_READY && player.mediaItemCount > 0
         val next = PlaybackSnapshot(
             playback = playback,
             positionMs = player.currentPosition.coerceAtLeast(0L),
-            durationMs = if (duration == C.TIME_UNSET || duration < 0) -1L else duration,
+            durationMs = durationMs,
             error = error?.let { friendly(it) },
             quality = qualityOf(),
+            live = LiveSignals.fromEngine(
+                playerLive = player.isCurrentMediaItemLive,
+                hlsManifestLoaded = hlsLoaded,
+                hlsWithoutEndList = hlsOpen,
+                durationMs = durationMs,
+                ready = ready,
+            ),
         )
         val previous = cached
         cached = next
-        if (previous.playback != next.playback || previous.error != next.error || previous.quality != next.quality) {
+        if (previous.playback != next.playback || previous.error != next.error ||
+            previous.quality != next.quality || previous.live != next.live ||
+            (previous.durationMs > 0) != (next.durationMs > 0)
+        ) {
             listener(next)
+        }
+    }
+
+    private fun playerIsActive(): Boolean {
+        if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) return false
+        return player.isLoading || player.playWhenReady
+    }
+
+    private class Throughput {
+        private val lock = Any()
+        private var bytes = 0L
+        private var windowStart = SystemClock.elapsedRealtime()
+        private var uidAtWindow = TrafficStats.getUidRxBytes(Process.myUid())
+
+        @Volatile
+        var perSecond = 0L
+            private set
+
+        fun add(count: Int) {
+            synchronized(lock) { bytes += count.toLong() }
+        }
+
+        fun reset() {
+            synchronized(lock) {
+                bytes = 0L
+                windowStart = SystemClock.elapsedRealtime()
+                uidAtWindow = TrafficStats.getUidRxBytes(Process.myUid())
+                perSecond = 0L
+            }
+        }
+
+        fun sample(active: Boolean): Long {
+            val now = SystemClock.elapsedRealtime()
+            synchronized(lock) {
+                val elapsed = now - windowStart
+                if (elapsed < 1_000L) return perSecond
+                val counted = bytes
+                bytes = 0L
+                val uidThen = uidAtWindow
+                val uidNow = TrafficStats.getUidRxBytes(Process.myUid())
+                uidAtWindow = uidNow
+                windowStart = now
+                val uidDelta = if (uidThen >= 0L && uidNow >= 0L) (uidNow - uidThen).coerceAtLeast(0L) else 0L
+                val chosen = when {
+                    counted > 0L -> counted
+                    active && uidDelta > 0L -> uidDelta
+                    else -> 0L
+                }
+                perSecond = chosen * 1_000L / elapsed
+                return perSecond
+            }
         }
     }
 

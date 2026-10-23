@@ -15,7 +15,9 @@ import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
 import com.wddclass.clicktocast.R
 import com.wddclass.clicktocast.dlna.DlnaTime
+import com.wddclass.clicktocast.dlna.NetSpeed
 import com.wddclass.clicktocast.dlna.PlaybackRates
+import com.wddclass.clicktocast.prefs.ReceiverSettings
 import com.wddclass.clicktocast.service.UiState
 
 class PlayerActivity : TvActivity() {
@@ -26,6 +28,8 @@ class PlayerActivity : TvActivity() {
     private var userHidOsd = false
     private var seenSession = -1L
     private var exitArmedUntil = 0L
+    private var live = false
+    private var alwaysShowNetSpeed = false
 
     private val hideOsd = Runnable {
         if (!shouldHoldOsd()) setOsdVisible(false)
@@ -35,6 +39,7 @@ class PlayerActivity : TvActivity() {
 
     private val tick = object : Runnable {
         override fun run() {
+            paintNet()
             if (osdVisible) paintTransport()
             main.postDelayed(this, 250)
         }
@@ -44,11 +49,13 @@ class PlayerActivity : TvActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_player)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        readNetPref()
         findViewById<ImageButton>(R.id.play_pause).setOnClickListener {
             connection.api?.togglePlay()
             reveal()
         }
         findViewById<TextView>(R.id.speed_button).setOnClickListener {
+            if (live) return@setOnClickListener
             if (speedMenuOpen()) closeSpeedMenu(focusButton = true) else openSpeedMenu()
         }
         findViewById<PlayerView>(R.id.player_view).setOnClickListener { reveal() }
@@ -64,6 +71,12 @@ class PlayerActivity : TvActivity() {
         Pills.attach(findViewById(R.id.speed_button))
         findViewById<ImageButton>(R.id.play_pause).requestFocus()
         reveal()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        readNetPref()
+        paintNet()
     }
 
     override fun onStart() {
@@ -136,7 +149,7 @@ class PlayerActivity : TvActivity() {
             }
         }
         val onSeekBar = currentFocus?.id == R.id.progress
-        if (onSeekBar && (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+        if (!live && onSeekBar && (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)) {
             if (event.action != KeyEvent.ACTION_DOWN) return true
             val delta = if (code == KeyEvent.KEYCODE_DPAD_LEFT) -10_000L else 10_000L
             connection.api?.seekBy(delta)
@@ -153,7 +166,7 @@ class PlayerActivity : TvActivity() {
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER,
             KeyEvent.KEYCODE_NUMPAD_ENTER,
-            -> if (currentFocus?.id == R.id.speed_button) openSpeedMenu() else api?.togglePlay()
+            -> if (!live && currentFocus?.id == R.id.speed_button) openSpeedMenu() else api?.togglePlay()
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_MEDIA_PLAY,
             KeyEvent.KEYCODE_MEDIA_PAUSE,
@@ -170,6 +183,10 @@ class PlayerActivity : TvActivity() {
             return true
         }
         if (event.action != KeyEvent.ACTION_DOWN) return true
+        if (live && (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+            reveal()
+            return true
+        }
         when (code) {
             KeyEvent.KEYCODE_DPAD_LEFT -> connection.api?.seekBy(-10_000)
             KeyEvent.KEYCODE_DPAD_RIGHT -> connection.api?.seekBy(10_000)
@@ -218,6 +235,7 @@ class PlayerActivity : TvActivity() {
         findViewById<TextView>(R.id.source_line).text = state.sourceLine
         findViewById<TextView>(R.id.video_title).text =
             state.title.ifBlank { getString(R.string.opening) }
+        live = state.live
         paintSpeed(state.speed)
         val hints = findViewById<TextView>(R.id.hints)
         if (state.error != null) {
@@ -229,15 +247,19 @@ class PlayerActivity : TvActivity() {
             main.removeCallbacks(hideOsd)
         } else if (hints.tag == "error") {
             hints.tag = null
-            hints.text = getString(R.string.remote_hints)
+            hints.text = getString(if (live) R.string.live_hints else R.string.remote_hints)
             hints.setTextColor(getColor(R.color.muted))
             reveal()
-        } else if (state.playing) {
-            if (!userHidOsd) armHide()
-        } else if (!userHidOsd) {
-            main.removeCallbacks(hideOsd)
-            setOsdVisible(true)
+        } else {
+            hints.text = getString(if (live) R.string.live_hints else R.string.remote_hints)
+            if (state.playing) {
+                if (!userHidOsd) armHide()
+            } else if (!userHidOsd) {
+                main.removeCallbacks(hideOsd)
+                setOsdVisible(true)
+            }
         }
+        applyLiveChrome()
         paintTransport()
     }
 
@@ -258,6 +280,7 @@ class PlayerActivity : TvActivity() {
     }
 
     private fun onScrub(fraction: Float, finished: Boolean) {
+        if (live) return
         val player = connection.api?.player()
         val duration = player?.duration ?: -1L
         val ms = if (duration > 0) (fraction * duration).toLong() else 0L
@@ -319,12 +342,59 @@ class PlayerActivity : TvActivity() {
     private fun setOsdVisible(visible: Boolean) {
         osdVisible = visible
         findViewById<View>(R.id.osd).visibility = if (visible) View.VISIBLE else View.GONE
+        applyLiveChrome()
+    }
+
+    private fun readNetPref() {
+        alwaysShowNetSpeed = ReceiverSettings(this).alwaysShowNetSpeed
+    }
+
+    private fun paintNet() {
+        val view = findViewById<TextView>(R.id.net_speed) ?: return
+        view.text = NetSpeed.format(connection.api?.downloadBytesPerSecond() ?: 0L)
+        view.visibility = if (osdVisible || alwaysShowNetSpeed) View.VISIBLE else View.GONE
+    }
+
+    private fun applyLiveChrome() {
+        val play = findViewById<View>(R.id.play_pause) ?: return
+        val speed = findViewById<View>(R.id.speed_button)
+        val position = findViewById<View>(R.id.position)
+        val duration = findViewById<View>(R.id.duration)
+        val bar = findViewById<View>(R.id.progress)
+        val inline = findViewById<View>(R.id.live_inline)
+        val floating = findViewById<View>(R.id.live_badge)
+        if (live) {
+            if (speedMenuOpen()) closeSpeedMenu(focusButton = false)
+            speed.visibility = View.GONE
+            position.visibility = View.GONE
+            duration.visibility = View.GONE
+            bar.visibility = View.GONE
+            inline.visibility = if (osdVisible) View.VISIBLE else View.GONE
+            floating.visibility = if (osdVisible) View.GONE else View.VISIBLE
+            play.nextFocusRightId = play.id
+            play.nextFocusDownId = play.id
+            val focused = currentFocus?.id
+            if (focused == R.id.speed_button || focused == R.id.progress || focusInSpeedMenu()) {
+                play.requestFocus()
+            }
+        } else {
+            speed.visibility = View.VISIBLE
+            position.visibility = View.VISIBLE
+            duration.visibility = View.VISIBLE
+            bar.visibility = View.VISIBLE
+            inline.visibility = View.GONE
+            floating.visibility = View.GONE
+            play.nextFocusRightId = R.id.speed_button
+            play.nextFocusDownId = R.id.progress
+        }
+        paintNet()
     }
 
     private fun speedMenuOpen(): Boolean =
         findViewById<View>(R.id.speed_row).visibility == View.VISIBLE
 
     private fun openSpeedMenu() {
+        if (live) return
         val row = findViewById<LinearLayout>(R.id.speed_row)
         row.visibility = View.VISIBLE
         val current = connection.api?.snapshot()?.speed ?: "1"

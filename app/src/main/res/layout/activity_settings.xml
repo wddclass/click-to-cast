@@ -70,6 +70,12 @@
                 android:text="@string/auto_start_on" />
 
             <TextView
+                android:id="@+id/always_net"
+                style="@style/Pill"
+                android:layout_marginTop="14dp"
+                android:text="@string/always_net_off" />
+
+            <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="28dp"

@@ -16,6 +16,7 @@ data class SessionSnapshot(
     val playing: Boolean,
     val session: Long,
     val speed: String = "1",
+    val live: Boolean = false,
 )
 
 /**
@@ -45,6 +46,8 @@ class DlnaRenderer(
     private var volume = 40
     private var muted = false
     private var speed = "1"
+    private var declaredLive = false
+    private var reportedLive = false
     private var lastQuality = ""
     private var session = 0L
     private var pendingFraction = 0.0
@@ -147,6 +150,7 @@ class DlnaRenderer(
     fun onEngineUpdate(snap: PlaybackSnapshot) {
         var stateChanged = false
         var qualityChanged = false
+        var resetSpeed = false
         synchronized(lock) {
             when (snap.playback) {
                 EnginePlayback.ERROR -> {
@@ -171,7 +175,18 @@ class DlnaRenderer(
                 lastQuality = snap.quality
                 qualityChanged = true
             }
+            val liveNow = isLive(snap)
+            if (liveNow && speed != "1") {
+                speed = "1"
+                stateChanged = true
+                resetSpeed = true
+            }
+            if (liveNow != reportedLive) {
+                reportedLive = liveNow
+                stateChanged = true
+            }
         }
+        if (resetSpeed) player.setSpeed(1f)
         val pendingSeek = synchronized(lock) {
             if (pendingFraction > 0.0 && snap.durationMs > 0) {
                 val target = (snap.durationMs * pendingFraction).toLong()
@@ -220,6 +235,8 @@ class DlnaRenderer(
             errorText = null
             speed = "1"
             pendingFraction = 0.0
+            declaredLive = false
+            reportedLive = false
         }
         DmrLog.i("replay ${redactUrl(trimmed)} title=$resolvedTitle")
         player.setSpeed(1f)
@@ -252,8 +269,8 @@ class DlnaRenderer(
     }
 
     fun seekSeconds(seconds: Double) {
-        val hasMedia = synchronized(lock) { uri.isNotBlank() }
-        if (!hasMedia) return
+        val skip = synchronized(lock) { uri.isBlank() || isLive(player.snapshot()) }
+        if (skip) return
         player.seekTo((seconds * 1000.0).toLong().coerceAtLeast(0))
     }
 
@@ -321,8 +338,10 @@ class DlnaRenderer(
             errorText = null
             speed = "1"
             pendingFraction = 0.0
+            declaredLive = LiveSignals.metadataDeclaresLive(rawMetadata)
+            reportedLive = false
         }
-        DmrLog.i("set uri ${redactUrl(trimmed)} title=$resolvedTitle")
+        DmrLog.i("set uri ${redactUrl(trimmed)} title=$resolvedTitle live=$declaredLive")
         player.setSpeed(1f)
         player.load(request)
         publish(Upnp.AVT)
@@ -388,8 +407,15 @@ class DlnaRenderer(
     }
 
     private fun seek(unit: String, target: String): SoapResult {
-        val hasMedia = synchronized(lock) { uri.isNotBlank() }
-        if (!hasMedia) return SoapResult.fault(701, "Transition not available")
+        val gate = synchronized(lock) {
+            when {
+                uri.isBlank() -> 701
+                isLive(player.snapshot()) -> 710
+                else -> 0
+            }
+        }
+        if (gate == 701) return SoapResult.fault(701, "Transition not available")
+        if (gate == 710) return SoapResult.fault(710, "Seek mode not supported")
         val normalized = unit.trim().uppercase()
         if (normalized != "REL_TIME" && normalized != "ABS_TIME") {
             return SoapResult.fault(710, "Seek mode not supported")
@@ -497,12 +523,16 @@ class DlnaRenderer(
         }
     }
 
-    private fun actions(): String = when (transportState(player.snapshot())) {
-        "PLAYING" -> "Pause,Stop,Seek"
-        "PAUSED_PLAYBACK" -> "Play,Stop,Seek"
-        "STOPPED" -> if (uri.isBlank()) "" else "Play,Stop,Seek"
-        "TRANSITIONING" -> "Stop"
-        else -> ""
+    private fun actions(): String {
+        val engine = player.snapshot()
+        val seek = if (isLive(engine)) "" else ",Seek"
+        return when (transportState(engine)) {
+            "PLAYING" -> "Pause,Stop$seek"
+            "PAUSED_PLAYBACK" -> "Play,Stop$seek"
+            "STOPPED" -> if (uri.isBlank()) "" else "Play,Stop$seek"
+            "TRANSITIONING" -> "Stop"
+            else -> ""
+        }
     }
 
     private fun statusLine(state: String): String = when {
@@ -541,8 +571,12 @@ class DlnaRenderer(
             playing = state == "PLAYING" || state == "TRANSITIONING",
             session = session,
             speed = speed,
+            live = isLive(engine),
         )
     }
+
+    private fun isLive(engine: PlaybackSnapshot): Boolean =
+        LiveSignals.combine(engine.live, declaredLive, engine.durationMs)
 
     /** True when the current item is already on screen. Call only while holding [lock]. */
     private fun showingLocked(): Boolean {
@@ -555,7 +589,7 @@ class DlnaRenderer(
     fun setLocalSpeed(rate: Double): Boolean {
         val label = PlaybackRates.label(rate) ?: return false
         val ready = synchronized(lock) {
-            if (uri.isBlank()) {
+            if (uri.isBlank() || isLive(player.snapshot())) {
                 false
             } else {
                 speed = label

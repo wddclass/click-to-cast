@@ -60,6 +60,7 @@ data class UiState(
     val session: Long = 0,
     val quality: String = "",
     val speed: String = "1",
+    val live: Boolean = false,
 )
 
 class CastReceiverService : Service() {
@@ -73,6 +74,7 @@ class CastReceiverService : Service() {
         fun seekBy(deltaMs: Long)
         fun seekTo(positionMs: Long)
         fun setSpeed(rate: Float): Boolean
+        fun downloadBytesPerSecond(): Long
         fun adjustVolume(deltaPercent: Int)
         fun notePlayerVisible(visible: Boolean)
         fun history(): List<CastRecord>
@@ -312,6 +314,7 @@ class CastReceiverService : Service() {
             session = snap.session,
             quality = snap.quality,
             speed = snap.speed,
+            live = snap.live,
         )
     }
 
@@ -480,19 +483,26 @@ class CastReceiverService : Service() {
         }
 
         override fun seekBy(deltaMs: Long) {
-            if (!::playerBackend.isInitialized) return
+            if (!::playerBackend.isInitialized || !::renderer.isInitialized) return
+            if (renderer.snapshot().live) return
             val next = playerBackend.snapshot().positionMs + deltaMs
             playerBackend.seekTo(next)
         }
 
         override fun seekTo(positionMs: Long) {
-            if (!::playerBackend.isInitialized) return
+            if (!::playerBackend.isInitialized || !::renderer.isInitialized) return
+            if (renderer.snapshot().live) return
             playerBackend.seekTo(positionMs)
         }
 
         override fun setSpeed(rate: Float): Boolean {
             if (!::renderer.isInitialized) return false
             return renderer.setLocalSpeed(rate.toDouble())
+        }
+
+        override fun downloadBytesPerSecond(): Long {
+            if (!::playerBackend.isInitialized) return 0L
+            return playerBackend.downloadBytesPerSecond()
         }
 
         override fun notePlayerVisible(visible: Boolean) {

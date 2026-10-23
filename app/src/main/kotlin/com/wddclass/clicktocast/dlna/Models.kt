@@ -15,6 +15,7 @@ data class PlaybackSnapshot(
     val durationMs: Long = -1L,
     val error: String? = null,
     val quality: String = "",
+    val live: Boolean = false,
 )
 
 data class PlaybackRequest(

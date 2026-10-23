@@ -18,6 +18,8 @@
     <string name="auto_start">开机自启</string>
     <string name="auto_start_on">开机自启：开</string>
     <string name="auto_start_off">开机自启：关</string>
+    <string name="always_net_on">常显网速：开</string>
+    <string name="always_net_off">常显网速：关</string>
     <string name="ua_label">访问视频时使用的标识</string>
     <string name="ua_browser">浏览器标识</string>
     <string name="ua_player">播放器标识</string>
@@ -37,6 +39,10 @@
     <string name="back">返回</string>
     <string name="play_pause">播放或暂停</string>
     <string name="remote_hints">上下显示控制条。左右移动焦点，进度条上左右快进。倍速用上下选择。返回再按一次退出</string>
+    <string name="live_hints">上下显示控制条。返回再按一次退出</string>
+    <string name="live_label">Live</string>
+    <string name="live_desc">直播</string>
+    <string name="net_speed_desc">当前下载速度</string>
     <string name="exit_confirm">再按一次返回退出</string>
     <string name="seek_bar">播放进度</string>
     <string name="speed_menu">播放速度</string>
