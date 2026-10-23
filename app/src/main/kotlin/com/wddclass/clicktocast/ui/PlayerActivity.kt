@@ -352,7 +352,8 @@ class PlayerActivity : TvActivity() {
     private fun paintNet() {
         val view = findViewById<TextView>(R.id.net_speed) ?: return
         view.text = NetSpeed.format(connection.api?.downloadBytesPerSecond() ?: 0L)
-        view.visibility = if (osdVisible || alwaysShowNetSpeed) View.VISIBLE else View.GONE
+        val capsule = findViewById<View>(R.id.net_speed_capsule) ?: view
+        capsule.visibility = if (osdVisible || alwaysShowNetSpeed) View.VISIBLE else View.GONE
     }
 
     private fun applyLiveChrome() {
@@ -362,15 +363,13 @@ class PlayerActivity : TvActivity() {
         val duration = findViewById<View>(R.id.duration)
         val bar = findViewById<View>(R.id.progress)
         val inline = findViewById<View>(R.id.live_inline)
-        val floating = findViewById<View>(R.id.live_badge)
         if (live) {
             if (speedMenuOpen()) closeSpeedMenu(focusButton = false)
             speed.visibility = View.GONE
             position.visibility = View.GONE
             duration.visibility = View.GONE
             bar.visibility = View.GONE
-            inline.visibility = if (osdVisible) View.VISIBLE else View.GONE
-            floating.visibility = if (osdVisible) View.GONE else View.VISIBLE
+            inline.visibility = if (LiveChrome.badgeVisible(live, osdVisible)) View.VISIBLE else View.GONE
             play.nextFocusRightId = play.id
             play.nextFocusDownId = play.id
             val focused = currentFocus?.id
@@ -383,7 +382,6 @@ class PlayerActivity : TvActivity() {
             duration.visibility = View.VISIBLE
             bar.visibility = View.VISIBLE
             inline.visibility = View.GONE
-            floating.visibility = View.GONE
             play.nextFocusRightId = R.id.speed_button
             play.nextFocusDownId = R.id.progress
         }

@@ -1,5 +1,7 @@
 package com.wddclass.clicktocast.dlna
 
+import com.wddclass.clicktocast.ui.LiveChrome
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -44,5 +46,13 @@ class PlaybackChromeTest {
         assertTrue(LiveSignals.combine(false, true, 0))
         assertFalse(LiveSignals.combine(false, true, 90_000))
         assertFalse(LiveSignals.combine(false, false, -1))
+    }
+
+    @Test
+    fun liveBadgeShowsOnlyWithControls() {
+        assertTrue(LiveChrome.badgeVisible(live = true, controlsVisible = true))
+        assertFalse(LiveChrome.badgeVisible(live = true, controlsVisible = false))
+        assertFalse(LiveChrome.badgeVisible(live = false, controlsVisible = true))
+        assertFalse(LiveChrome.badgeVisible(live = false, controlsVisible = false))
     }
 }

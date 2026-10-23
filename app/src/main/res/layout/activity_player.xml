@@ -31,56 +31,29 @@
         android:textSize="18sp"
         android:visibility="gone" />
 
-    <LinearLayout
-        android:id="@+id/live_badge"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|start"
-        android:layout_marginStart="32dp"
-        android:layout_marginTop="22dp"
-        android:background="@drawable/bg_field"
-        android:contentDescription="@string/live_desc"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="14dp"
-        android:paddingTop="8dp"
-        android:paddingEnd="16dp"
-        android:paddingBottom="8dp"
-        android:visibility="gone">
-
-        <View
-            android:layout_width="8dp"
-            android:layout_height="8dp"
-            android:background="@drawable/bg_live_dot"
-            android:importantForAccessibility="no" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:text="@string/live_label"
-            android:textColor="@color/text"
-            android:textSize="16sp"
-            android:textStyle="bold" />
-    </LinearLayout>
-
-    <TextView
-        android:id="@+id/net_speed"
+    <com.wddclass.clicktocast.ui.FrostedLayout
+        android:id="@+id/net_speed_capsule"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|end"
         android:layout_marginTop="22dp"
         android:layout_marginEnd="32dp"
-        android:background="@drawable/bg_field"
-        android:contentDescription="@string/net_speed_desc"
-        android:fontFeatureSettings="tnum"
-        android:paddingStart="16dp"
-        android:paddingTop="8dp"
-        android:paddingEnd="16dp"
-        android:paddingBottom="8dp"
-        android:text="0 KB/s"
-        android:textColor="@color/text"
-        android:textSize="16sp" />
+        android:focusable="false">
+
+        <TextView
+            android:id="@+id/net_speed"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/net_speed_desc"
+            android:fontFeatureSettings="tnum"
+            android:paddingStart="16dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="8dp"
+            android:text="0 KB/s"
+            android:textColor="@color/text"
+            android:textSize="16sp" />
+    </com.wddclass.clicktocast.ui.FrostedLayout>
 
     <FrameLayout
         android:id="@+id/osd"

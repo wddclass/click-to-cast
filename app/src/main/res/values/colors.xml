@@ -11,4 +11,8 @@
     <color name="ink">#0A0E17</color>
     <color name="track">#33FFFFFF</color>
     <color name="field">#141A26</color>
+    <color name="frosted_fill">#C01C2433</color>
+    <color name="frosted_stroke">#73FFFFFF</color>
+    <color name="frosted_fill_focused">#D6283348</color>
+    <color name="frosted_stroke_focused">#E6FFFFFF</color>
 </resources>
