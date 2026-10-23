@@ -59,8 +59,11 @@ class AirPlayHandler(
     private val identity: () -> AirPlayIdentity,
     private val sink: AirPlaySink,
     private val keys: AirPlayKeys,
+    private val eventPort: () -> Int = { 8192 },
 ) {
     private val pairing = AirPlayPairing(keys)
+    private val ports = AirPlayPorts()
+    private var fairPlayKeyBytes = 0
     fun handle(request: HttpRequest): HttpResponse? {
         val response = dispatch(request)
         if (response == null && !shouldLog(request)) return null
@@ -72,7 +75,20 @@ class AirPlayHandler(
         return response?.let { decorate(request, it) }
     }
 
-    private fun dispatch(request: HttpRequest): HttpResponse? = when (request.path) {
+    private fun dispatch(request: HttpRequest): HttpResponse? {
+        when (request.method) {
+            "SETUP" -> return setup(request)
+            "RECORD" -> return rtspSimple(request, "record")
+            "GET_PARAMETER" -> return parameter(request, read = true)
+            "SET_PARAMETER" -> return parameter(request, read = false)
+            "FLUSH" -> return rtspSimple(request, "flush")
+            "TEARDOWN" -> return rtspSimple(request, "teardown")
+            "ANNOUNCE" -> return rtspSimple(request, "announce")
+        }
+        return dispatchPath(request)
+    }
+
+    private fun dispatchPath(request: HttpRequest): HttpResponse? = when (request.path) {
         "/info" -> if (request.method == "GET" || request.method == "POST") info() else null
         "/server-info" -> if (request.method == "GET") xml(AirPlayTexts.serverInfo(identity().deviceId)) else null
         "/playback-info" -> if (request.method == "GET") xml(AirPlayTexts.playbackInfo(sink.status())) else null
@@ -125,7 +141,7 @@ class AirPlayHandler(
         DmrLog.i(
             "airplay no handler for ${request.method} ${request.path} from ${request.remoteIp} " +
                 "verified=${pairing.isVerified(request.remoteIp)} hex=${AirPlayKeys.hexPrefix(request.body, 24)}; " +
-                "plaintext /play works after pair-verify, FairPlay and ChaCha control do not",
+                "fp-setup and SETUP are implemented; FairPlay stream decrypt is not",
         )
         return empty(501, "Not Implemented")
     }
@@ -209,7 +225,7 @@ class AirPlayHandler(
         if (reply.isEmpty()) {
             DmrLog.i(
                 "airplay pair-verify complete from ${request.remoteIp}; " +
-                    "next step is plaintext POST /play. ChaCha20-Poly1305 control is not implemented",
+                    "next may be fp-setup, then SETUP or plaintext POST /play",
             )
         } else {
             DmrLog.i("airplay pair-verify step1 ok from ${request.remoteIp} reply=${reply.size}")
@@ -223,12 +239,134 @@ class AirPlayHandler(
     }
 
     private fun fairplay(request: HttpRequest): HttpResponse {
-        val phase = if (request.body.size > 6) request.body[6].toInt() and 0xFF else -1
+        val seq = if (request.body.size > 6) request.body[6].toInt() and 0xFF else -1
+        val mode = if (request.body.size > 14) request.body[14].toInt() and 0xFF else -1
         DmrLog.i(
-            "airplay fp-setup from ${request.remoteIp} phase=$phase bytes=${request.body.size}; " +
-                "FairPlay mirroring is not implemented",
+            "airplay fp-setup from ${request.remoteIp} seq=$seq mode=$mode bytes=${request.body.size} " +
+                "hex=${AirPlayKeys.hexPrefix(request.body, 16)}",
         )
-        return empty(501, "Not Implemented")
+        val reply = FairPlaySetup.reply(request.body)
+        if (reply == null) {
+            DmrLog.i("airplay fp-setup rejected: wanted FPLY version 3, 16-byte phase 1 or 164-byte phase 2")
+            return empty(400, "Bad Request")
+        }
+        if (request.body.size >= 164) {
+            fairPlayKeyBytes = request.body.size
+            DmrLog.i(
+                "airplay fp-setup phase 2 reply=${reply.size}; keymsg stored. " +
+                    "playfair_decrypt is not included, so an ekey cannot be unwrapped",
+            )
+        } else {
+            DmrLog.i("airplay fp-setup phase 1 mode=$mode reply=${reply.size}")
+        }
+        return octets(reply)
+    }
+
+    private fun setup(request: HttpRequest): HttpResponse {
+        ports.ensure()
+        val events = eventPort().takeIf { it > 0 } ?: 8192
+        val parsed = plistDictionary(request.body)
+        if (parsed == null) {
+            DmrLog.i(
+                "airplay SETUP from ${request.remoteIp} not a binary plist bytes=${request.body.size} " +
+                    "timing=${ports.timingPort} data=${ports.dataPort}",
+            )
+            return HttpResponse(
+                200,
+                "OK",
+                linkedMapOf(
+                    "Transport" to
+                        "RTP/AVP/UDP;unicast;mode=record;server_port=${ports.dataPort};control_port=${ports.timingPort}",
+                ),
+            )
+        }
+        val ekey = parsed["ekey"] as? ByteArray
+        val eiv = parsed["eiv"] as? ByteArray
+        DmrLog.i(
+            "airplay SETUP from ${request.remoteIp} keys=${parsed.keys.joinToString(",")} " +
+                "ekey=${ekey?.size ?: 0} eiv=${eiv?.size ?: 0} fairPlayKeymsg=$fairPlayKeyBytes " +
+                "timing=${ports.timingPort} data=${ports.dataPort} event=$events",
+        )
+        if (ekey != null) {
+            DmrLog.i("airplay SETUP ekey present; FairPlay key unwrap and H.264 decrypt are not in this build")
+        }
+        val streams = streamReplies(parsed["streams"])
+        val reply = linkedMapOf<String, Any>(
+            "eventPort" to events,
+            "timingPort" to ports.timingPort,
+            "streams" to streams,
+        )
+        DmrLog.i("airplay SETUP reply streams=${streams.size} types=${streamTypes(streams)}")
+        return HttpResponse(
+            200,
+            "OK",
+            linkedMapOf("Content-Type" to "application/x-apple-binary-plist"),
+            BinaryPlist.write(reply),
+        )
+    }
+
+    private fun streamReplies(value: Any?): List<Map<String, Any>> {
+        val incoming = (value as? List<*>) ?: emptyList<Any?>()
+        val replies = ArrayList<Map<String, Any>>()
+        for (item in incoming) {
+            val stream = item as? Map<*, *> ?: continue
+            val type = number(stream["type"]) ?: continue
+            val reply = linkedMapOf<String, Any>(
+                "type" to type,
+                "dataPort" to ports.dataPort,
+            )
+            number(stream["streamConnectionID"])?.let { reply["streamConnectionID"] = it }
+            if (type == 96L) reply["controlPort"] = ports.timingPort
+            val kind = when (type) {
+                110L -> "mirror"
+                96L -> "audio"
+                else -> "other"
+            }
+            DmrLog.i("airplay SETUP stream type=$type ($kind)")
+            replies += reply
+        }
+        if (replies.isEmpty()) {
+            replies += linkedMapOf("type" to 110L, "dataPort" to ports.dataPort)
+            DmrLog.i("airplay SETUP had no streams; replying with type 110 data port")
+        }
+        return replies
+    }
+
+    private fun streamTypes(streams: List<Map<String, Any>>): String =
+        streams.joinToString(",") { it["type"].toString() }
+
+    private fun parameter(request: HttpRequest, read: Boolean): HttpResponse {
+        val text = String(request.body, Charsets.UTF_8).replace('\r', ' ').take(120)
+        DmrLog.i("airplay ${request.method} from ${request.remoteIp} body=$text")
+        if (!read) return empty(200, "OK")
+        return text(200, "OK", "volume: 0.000000\n", "text/parameters")
+    }
+
+    private fun rtspSimple(request: HttpRequest, name: String): HttpResponse {
+        DmrLog.i(
+            "airplay $name from ${request.remoteIp} bytes=${request.body.size} " +
+                "hex=${AirPlayKeys.hexPrefix(request.body, 16)}",
+        )
+        return empty(200, "OK")
+    }
+
+    private fun plistDictionary(body: ByteArray): Map<*, *>? {
+        if (body.size < 8 || !body.copyOfRange(0, 8).contentEquals("bplist00".toByteArray(Charsets.US_ASCII))) {
+            return null
+        }
+        return try {
+            BinaryPlist.top(body) as? Map<*, *>
+        } catch (error: Throwable) {
+            DmrLog.i("airplay SETUP plist failed: ${error.message}")
+            null
+        }
+    }
+
+    private fun number(value: Any?): Long? = when (value) {
+        is Long -> value
+        is Int -> value.toLong()
+        is Double -> value.toLong()
+        else -> null
     }
 
     private fun options(): HttpResponse = HttpResponse(

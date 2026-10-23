@@ -160,7 +160,7 @@ class AirPlayTest {
         val fairplay = handler.handle(
             HttpRequest("POST", "/fp-setup", emptyMap(), ByteArray(16), "192.168.123.8", protocol = "RTSP/1.0"),
         )
-        assertEquals(501, fairplay?.status)
+        assertEquals(400, fairplay?.status)
 
         val upgraded = handler.handle(
             HttpRequest(
@@ -244,7 +244,7 @@ class AirPlayTest {
                 protocol = "RTSP/1.0",
             ),
         )
-        assertEquals(501, setupStream?.status)
+        assertEquals(200, setupStream?.status)
 
         val forged = second.copyOf()
         forged[forged.size - 1] = (forged[forged.size - 1].toInt() xor 0xFF).toByte()
@@ -255,6 +255,87 @@ class AirPlayTest {
             HttpRequest("POST", "/pair-verify", emptyMap(), forged, "192.168.123.9", protocol = "RTSP/1.0"),
         )
         assertEquals(403, rejected?.status)
+    }
+
+    @Test
+    fun fpSetupThenMirrorSetup() {
+        val phase1 = hex("46504c590301010000000004020002bb")
+        assertEquals(16, phase1.size)
+        val keys = AirPlayKeys.fromSeed(ByteArray(32) { 3 })
+        val handler = AirPlayHandler(
+            { AirPlayIdentity("投屏点我", "12:11:11:22:22:33", keys.publicKeyHex) },
+            FakeSink(),
+            keys,
+            eventPort = { 8192 },
+        )
+        val first = handler.handle(
+            HttpRequest("POST", "/fp-setup", mapOf("cseq" to "4"), phase1, "192.168.123.8", protocol = "RTSP/1.0"),
+        )
+        assertEquals(200, first?.status)
+        assertEquals(142, first!!.body.size)
+        assertEquals(0x02, first.body[13].toInt() and 0xFF)
+
+        val phase2 = ByteArray(164)
+        phase1.copyInto(phase2)
+        phase2[6] = 3
+        for (index in 144 until 164) phase2[index] = (index - 100).toByte()
+        val second = handler.handle(
+            HttpRequest("POST", "/fp-setup", mapOf("cseq" to "5"), phase2, "192.168.123.8", protocol = "RTSP/1.0"),
+        )
+        assertEquals(200, second?.status)
+        assertEquals(32, second!!.body.size)
+        assertTrue(second.body.copyOfRange(12, 32).contentEquals(phase2.copyOfRange(144, 164)))
+
+        val setupBody = BinaryPlist.write(
+            linkedMapOf(
+                "ekey" to ByteArray(72) { 1 },
+                "streams" to listOf(linkedMapOf<String, Any>("type" to 110, "streamConnectionID" to 7L)),
+            ),
+        )
+        val setup = handler.handle(
+            HttpRequest(
+                "SETUP",
+                "/stream",
+                mapOf("cseq" to "6", "content-type" to "application/x-apple-binary-plist"),
+                setupBody,
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(200, setup?.status)
+        assertEquals("application/x-apple-binary-plist", setup?.headers?.get("Content-Type"))
+        val parsed = BinaryPlist.top(setup!!.body) as Map<*, *>
+        assertEquals(8192L, parsed["eventPort"])
+        assertTrue((parsed["timingPort"] as Long) > 0L)
+        val streams = parsed["streams"] as List<*>
+        val stream = streams[0] as Map<*, *>
+        assertEquals(110L, stream["type"])
+        assertEquals(7L, stream["streamConnectionID"])
+        assertTrue((stream["dataPort"] as Long) > 0L)
+
+        val record = handler.handle(
+            HttpRequest("RECORD", "/stream", mapOf("cseq" to "7"), ByteArray(0), "192.168.123.8", protocol = "RTSP/1.0"),
+        )
+        assertEquals(200, record?.status)
+        val play = handler.handle(
+            HttpRequest(
+                "POST",
+                "/play",
+                emptyMap(),
+                "Content-Location: http://cdn.example/after-setup.mp4\nStart-Position: 0\n".toByteArray(),
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        assertEquals(200, play?.status)
+    }
+
+    private fun hex(text: String): ByteArray {
+        val out = ByteArray(text.length / 2)
+        for (index in out.indices) {
+            out[index] = text.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+        return out
     }
 
     @Test

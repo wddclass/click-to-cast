@@ -3,6 +3,7 @@ package com.wddclass.clicktocast.ui
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.TypedValue
 import android.view.KeyEvent
 import android.view.View
@@ -24,10 +25,13 @@ class PlayerActivity : TvActivity() {
     private var osdVisible = true
     private var userHidOsd = false
     private var seenSession = -1L
+    private var exitArmedUntil = 0L
 
     private val hideOsd = Runnable {
         if (!shouldHoldOsd()) setOsdVisible(false)
     }
+
+    private val hideExit = Runnable { disarmExit() }
 
     private val tick = object : Runnable {
         override fun run() {
@@ -77,6 +81,7 @@ class PlayerActivity : TvActivity() {
         connection.api?.notePlayerVisible(false)
         main.removeCallbacks(tick)
         main.removeCallbacks(hideOsd)
+        main.removeCallbacks(hideExit)
         stopObserving?.invoke()
         stopObserving = null
         findViewById<PlayerView>(R.id.player_view).player = null
@@ -90,14 +95,25 @@ class PlayerActivity : TvActivity() {
             if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) return true
             if (speedMenuOpen()) {
                 closeSpeedMenu(focusButton = true)
+                disarmExit()
                 return true
             }
             if (osdVisible) {
                 hideOsdByUser()
+                disarmExit()
                 return true
             }
-            connection.api?.stopPlayback()
-            finish()
+            val now = SystemClock.uptimeMillis()
+            if (now <= exitArmedUntil) {
+                disarmExit()
+                connection.api?.stopPlayback()
+                finish()
+                return true
+            }
+            exitArmedUntil = now + 2_000L
+            findViewById<View>(R.id.exit_hint).visibility = View.VISIBLE
+            main.removeCallbacks(hideExit)
+            main.postDelayed(hideExit, 2_000L)
             return true
         }
         if (code == KeyEvent.KEYCODE_MEDIA_STOP) {
@@ -108,9 +124,16 @@ class PlayerActivity : TvActivity() {
         }
         if (!isTransportKey(code)) return super.dispatchKeyEvent(event)
         if (!osdVisible) return hiddenTransport(event, code)
-        if (speedMenuOpen() && focusInSpeedMenu() && isDirectional(code)) {
-            if (event.action == KeyEvent.ACTION_DOWN) reveal()
-            return super.dispatchKeyEvent(event)
+        if (speedMenuOpen() && focusInSpeedMenu()) {
+            if (isDirectional(code)) {
+                if (event.action == KeyEvent.ACTION_DOWN) reveal()
+                return super.dispatchKeyEvent(event)
+            }
+            if (isOk(code)) {
+                if (event.action != KeyEvent.ACTION_DOWN) return true
+                currentFocus?.performClick()
+                return true
+            }
         }
         val onSeekBar = currentFocus?.id == R.id.progress
         if (onSeekBar && (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)) {
@@ -142,7 +165,9 @@ class PlayerActivity : TvActivity() {
 
     private fun hiddenTransport(event: KeyEvent, code: Int): Boolean {
         if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) {
-            return super.dispatchKeyEvent(event)
+            if (event.action != KeyEvent.ACTION_DOWN) return true
+            reveal()
+            return true
         }
         if (event.action != KeyEvent.ACTION_DOWN) return true
         when (code) {
@@ -167,6 +192,11 @@ class PlayerActivity : TvActivity() {
         code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
         code == KeyEvent.KEYCODE_MEDIA_PLAY ||
         code == KeyEvent.KEYCODE_MEDIA_PAUSE
+
+    private fun isOk(code: Int): Boolean =
+        code == KeyEvent.KEYCODE_DPAD_CENTER ||
+            code == KeyEvent.KEYCODE_ENTER ||
+            code == KeyEvent.KEYCODE_NUMPAD_ENTER
 
     private fun isDirectional(code: Int): Boolean =
         code == KeyEvent.KEYCODE_DPAD_LEFT ||
@@ -238,9 +268,16 @@ class PlayerActivity : TvActivity() {
 
     private fun reveal() {
         userHidOsd = false
+        disarmExit()
         setOsdVisible(true)
         if (!focusedOnControl()) findViewById<View>(R.id.play_pause).requestFocus()
         armHide()
+    }
+
+    private fun disarmExit() {
+        exitArmedUntil = 0L
+        main.removeCallbacks(hideExit)
+        findViewById<View>(R.id.exit_hint)?.visibility = View.GONE
     }
 
     private fun hideOsdByUser() {
@@ -344,15 +381,15 @@ class PlayerActivity : TvActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             )
-            params.marginEnd = gap
+            if (chips.isNotEmpty()) params.topMargin = gap
             row.addView(chip, params)
             chips += chip
         }
         chips.forEachIndexed { index, chip ->
-            chip.nextFocusLeftId = chips.getOrNull(index - 1)?.id ?: chip.id
-            chip.nextFocusRightId = chips.getOrNull(index + 1)?.id ?: chip.id
-            chip.nextFocusUpId = R.id.speed_button
-            chip.nextFocusDownId = R.id.progress
+            chip.nextFocusUpId = chips.getOrNull(index - 1)?.id ?: chip.id
+            chip.nextFocusDownId = chips.getOrNull(index + 1)?.id ?: chip.id
+            chip.nextFocusLeftId = chip.id
+            chip.nextFocusRightId = chip.id
         }
         Pills.attach(*chips.toTypedArray())
     }

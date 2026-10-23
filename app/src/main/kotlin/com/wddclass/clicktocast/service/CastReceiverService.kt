@@ -140,7 +140,12 @@ class CastReceiverService : Service() {
         appliedMuted = muted
         renderer.adoptVolume(percent, muted, echo = false)
         airplayKeys = AirPlayKeys.fromSeed(AirPlayKeys.seedFor(settings.deviceUuid))
-        val airplay = AirPlayHandler({ airplayIdentity() }, RendererAirPlaySink(renderer), airplayKeys)
+        val airplay = AirPlayHandler(
+            { airplayIdentity() },
+            RendererAirPlaySink(renderer),
+            airplayKeys,
+            eventPort = { httpPort },
+        )
         http = MiniHttpServer { request ->
             airplay.handle(request)
                 ?: RendererHttpHandler(renderer, { currentProfile() }, events).handle(request)

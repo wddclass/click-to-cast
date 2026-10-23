@@ -15,6 +15,22 @@
         app:surface_type="surface_view"
         app:use_controller="false" />
 
+    <TextView
+        android:id="@+id/exit_hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="24dp"
+        android:background="@drawable/bg_field"
+        android:paddingStart="22dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="22dp"
+        android:paddingBottom="10dp"
+        android:text="@string/exit_confirm"
+        android:textColor="@color/text"
+        android:textSize="18sp"
+        android:visibility="gone" />
+
     <FrameLayout
         android:id="@+id/osd"
         android:layout_width="match_parent"
@@ -73,6 +89,19 @@
             android:paddingStart="28dp"
             android:paddingEnd="28dp"
             android:paddingBottom="16dp">
+
+            <LinearLayout
+                android:id="@+id/speed_row"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end"
+                android:layout_marginBottom="8dp"
+                android:background="@drawable/bg_field"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="vertical"
+                android:padding="8dp"
+                android:visibility="gone" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -149,17 +178,6 @@
                 android:nextFocusLeft="@id/progress"
                 android:nextFocusRight="@id/progress"
                 android:nextFocusUp="@id/play_pause" />
-
-            <LinearLayout
-                android:id="@+id/speed_row"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:clipChildren="false"
-                android:clipToPadding="false"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/hints"

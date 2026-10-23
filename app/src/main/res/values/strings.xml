@@ -32,11 +32,12 @@
     <string name="history_replay_started">正在重播</string>
     <string name="about_title">关于</string>
     <string name="about_body">投屏点我是电视上的 DLNA 接收端。手机里的视频 App 把播放地址发给电视，电视用自己的播放器打开。没有账号，没有广告，也不会把观看记录发到外面。</string>
-    <string name="about_limits">DLNA 投屏可用。AirPlay 会宣告「投屏点我」，完成 32 字节配对后用 /play 接视频地址。屏幕镜像要 FairPlay，这一版解不了。乐播私有协议和带 DRM 的片源仍不支持。</string>
+    <string name="about_limits">DLNA 投屏可用。AirPlay 会完成配对和 fp-setup，再用 /play 接视频地址。屏幕镜像的 FairPlay 密钥这一版解不了。乐播私有协议和带 DRM 的片源仍不支持。</string>
     <string name="about_version">版本 %1$s</string>
     <string name="back">返回</string>
     <string name="play_pause">播放或暂停</string>
-    <string name="remote_hints">左右移动焦点。进度条上左右快进 10 秒，上键回到按钮。OK 暂停。返回先隐藏控制条</string>
+    <string name="remote_hints">上下显示控制条。左右移动焦点，进度条上左右快进。倍速用上下选择。返回再按一次退出</string>
+    <string name="exit_confirm">再按一次返回退出</string>
     <string name="seek_bar">播放进度</string>
     <string name="speed_menu">播放速度</string>
     <string name="speed_button">倍速 1×</string>

@@ -16,7 +16,7 @@
 - 播放 HTTP(S) 渐进式 MP4、HLS、DASH，以及 ExoPlayer 能识别的 FLV。地址被标错时，会先读一小段内容再判断是不是 HLS / DASH / FLV。
 - 可从 DIDL 元数据里带上 `User-Agent`、`Referer` 等请求头。
 - 前台服务常驻，可开机自启，回到桌面后仍然可被发现。
-- 遥控器：控制条显示时左右移动焦点；进度条获得焦点后左右才快进 10 秒。控制条隐藏时左右直接快进。音量键交给电视系统。OK 暂停。返回先隐藏控制条，控制条已经隐藏时再按返回才退出。平板上可以拖动进度条，松手后才跳转。
+- 遥控器：上下键显示控制条。控制条显示时左右移动焦点；进度条获得焦点后左右才快进 10 秒。控制条隐藏时左右直接快进。倍速在按钮上方弹出，上下选择，OK 确认。音量键交给电视系统。返回先关掉倍速和控制条；控制条已经隐藏时，第一次返回在画面顶部提示「再按一次返回退出」，两秒内再按才退出。平板上可以拖动进度条，松手后才跳转。
 - 倍速：0.5、0.75、1、1.25、1.5、2。暂停后再播放会留在原来的位置和倍速；新的投屏会停掉上一个，并把倍速改回 1。
 - 播放条在播放约 4 秒后自动隐藏，暂停、出错或打开倍速菜单时保持显示。点画面可以重新打开。
 - 回到桌面后如果已经允许「显示在其他应用上层」，新的投屏会尝试自动打开播放画面；系统拦住时会有一条可点的通知。没有这个权限时，首页和设置里会说明怎么开。
@@ -57,7 +57,7 @@ export ANDROID_HOME=...
 ## 已知限制
 
 - DLNA / UPnP 之外，另有 AirPlay 视频地址播放。应用在每块 IPv4 网卡上直接向 `224.0.0.251:5353` 宣告 `_airplay._tcp` 和 `_raop._tcp`（TTL 255），并回答同网段的 mDNS 查询。IP 变化或改名后会先发 TTL 0 的 goodbye，再按新地址重新宣告。iPhone 的 `GET /info` 是 **RTSP/1.0**，响应是 `RTSP/1.0 200`、二进制 plist，`deviceID` / `pk` / `features`（`0x5A7FFFF7,0x1E` = `130367356919`，与 versionCode 6 相同，含屏幕位和音频位）/ `model=AppleTV3,2` / `sourceVersion` 与 mDNS TXT 一致。`pk` 是这台电视自己的 Ed25519 公钥。同一条 RTSP 连接会继续读下一条请求。手机把视频 URL POST 到 `/play` 后由同一播放器开播。`/reverse` 带 `Upgrade: PTTH/1.0` 时回 `101` 并保持连接。
-- iOS 26 在 `GET /info` 之后会发 `POST /pair-setup`，正文是 32 字节的 Ed25519 公钥。电视回自己的 32 字节公钥（和 mDNS / `/info` 里的 `pk` 是同一把），再完成 `pair-verify`（X25519 临时密钥 + Ed25519 签名，AES-128-CTR）。配对成功后，Safari、照片、YouTube 这类会发视频地址的 App 走明文 `POST /play`。这不是 HomeKit SRP，也不会把后面的控制通道用 ChaCha20-Poly1305 加密。`features` 恢复成 versionCode 6 的 `0x5A7FFFF7,0x1E`，否则 iOS 26 的选择器会把设备藏起来。镜像仍然要 FairPlay，`/fp-setup` 和未知的 RTSP（例如 SETUP）回 501，不会出画面。RAOP 只做发现，不传 RTP 音频。logcat 标签 `ClickToCast` 会看到 `airplay pair-setup`、`airplay pair-verify` 以及之后每一条请求是否已配对。
+- iOS 26 在 `GET /info` 之后会发 `POST /pair-setup`，正文是 32 字节的 Ed25519 公钥。电视回自己的 32 字节公钥（和 mDNS / `/info` 里的 `pk` 是同一把），再完成 `pair-verify`（X25519 临时密钥 + Ed25519 签名，AES-128-CTR）。配对成功后，iOS 26 还会发 `POST /fp-setup`。16 字节的第一阶段按 mode 回 142 字节，164 字节的第二阶段回 12 字节头加请求最后 20 字节。接着的 `SETUP`（二进制 plist，stream type 110）回 `eventPort`、`timingPort` 和 `dataPort`；`RECORD`、`GET_PARAMETER`、`SET_PARAMETER` 回 200。Safari、照片、YouTube 的视频地址仍走明文 `POST /play`。这不是 HomeKit SRP，也没有 ChaCha20-Poly1305。`features` 仍是 versionCode 6 的 `0x5A7FFFF7,0x1E`。镜像的 AES 密钥解开在 UxPlay 的 GPL `playfair/omg_hax.c` 里，没有移植，所以屏幕镜像解不出画面。RAOP 只做发现，不传 RTP 音频。logcat 标签 `ClickToCast`。
 - Miracast、Chromecast、乐播 / 乐联私有协议仍未实现。
 - 爱奇艺、优酷、腾讯视频、Bilibili 的部分版本只走私有协议，或者地址带短时签名和 DRM。它们走标准 DLNA 时可以被发现；走私有协议时列表里不会出现本应用，或者给出地址后无法播放。
 - 不转码。编码、封装或 DRM 电视硬解不了，就会直接失败。
