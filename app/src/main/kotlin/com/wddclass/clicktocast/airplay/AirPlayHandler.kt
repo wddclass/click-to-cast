@@ -67,6 +67,7 @@ class AirPlayHandler(
     private var fairPlayMessage: ByteArray? = null
     private var sessionKey: ByteArray? = null
     private var sessionIv: ByteArray? = null
+    private var sessionPath: String = ""
     private var clientTimingPort: Int = 0
     fun handle(request: HttpRequest): HttpResponse? {
         val response = dispatch(request)
@@ -93,7 +94,7 @@ class AirPlayHandler(
     }
 
     private fun dispatchPath(request: HttpRequest): HttpResponse? = when (request.path) {
-        "/info" -> if (request.method == "GET" || request.method == "POST") info() else null
+        "/info" -> if (request.method == "GET" || request.method == "POST") info(request) else null
         "/server-info" -> if (request.method == "GET") xml(AirPlayTexts.serverInfo(identity().deviceId)) else null
         "/playback-info" -> if (request.method == "GET") xml(AirPlayTexts.playbackInfo(sink.status())) else null
         "/pair-setup" -> if (request.method == "POST") pairSetup(request) else null
@@ -191,14 +192,33 @@ class AirPlayHandler(
         return text(200, "OK", AirPlayTexts.scrubText(sink.status()), "text/parameters")
     }
 
-    private fun info(): HttpResponse {
+    private fun info(request: HttpRequest): HttpResponse {
         val who = identity()
+        val qualifier = infoQualifier(request)
+        val body = if (qualifier == "txtAirPlay" || qualifier == "txtRAOP") {
+            AirPlayTexts.infoTxtOnly(qualifier, who.deviceId, keys.edPublic)
+        } else {
+            AirPlayTexts.infoPlist(who.name, who.deviceId, keys.edPublic)
+        }
+        val keys = (runCatching { BinaryPlist.top(body) as? Map<*, *> }.getOrNull())?.keys?.joinToString(",")
+        DmrLog.i(
+            "airplay info from ${request.remoteIp} path=${request.path} qualifier=${qualifier ?: "-"} " +
+                "bytes=${body.size} keys=$keys",
+        )
         return HttpResponse(
             200,
             "OK",
             linkedMapOf("Content-Type" to "application/x-apple-binary-plist"),
-            AirPlayTexts.infoPlist(who.name, who.deviceId, keys.edPublic),
+            body,
         )
+    }
+
+    private fun infoQualifier(request: HttpRequest): String? {
+        val type = request.header("content-type") ?: return null
+        if (!type.contains("apple-binary-plist", ignoreCase = true)) return null
+        val root = plistDictionary(request.body) ?: return null
+        val qualifier = root["qualifier"] as? List<*> ?: return null
+        return qualifier.firstOrNull() as? String
     }
 
     private fun pairSetup(request: HttpRequest): HttpResponse {
@@ -266,7 +286,6 @@ class AirPlayHandler(
 
     private fun setup(request: HttpRequest): HttpResponse {
         ports.ensure()
-        val events = eventPort().takeIf { it > 0 } ?: 8192
         val parsed = plistDictionary(request.body)
         if (parsed == null) {
             DmrLog.i(
@@ -289,10 +308,10 @@ class AirPlayHandler(
         if (clientTiming > 0) clientTimingPort = clientTiming
         if (eiv != null) sessionIv = eiv.copyOf()
         DmrLog.i(
-            "airplay SETUP from ${request.remoteIp} keys=${parsed.keys.joinToString(",")} " +
+            "airplay SETUP from ${request.remoteIp} path=${request.path} " +
                 "ekey=${ekey?.size ?: 0} eiv=${eiv?.size ?: 0} keymsg=${message?.size ?: 0} " +
                 "clientTiming=$clientTiming timing=${ports.timingPort} data=${ports.dataPort} " +
-                "audio=${ports.audioPort} event=$events mirroring=${parsed["isScreenMirroringSession"]}",
+                "audio=${ports.audioPort} plist=${describePlist(parsed)}",
         )
         if (ekey != null) {
             sessionKey = unwrapKey(ekey, message)
@@ -302,20 +321,33 @@ class AirPlayHandler(
                     "playfair=${sessionKey?.size ?: 0} stored for the stream SETUP",
             )
         }
+        if (sessionPath.isNotEmpty() && sessionPath != request.path) {
+            DmrLog.i(
+                "airplay SETUP path ${request.path} reuses keys from $sessionPath " +
+                    "(a later TCP connection may use the session URL)",
+            )
+        }
+        sessionPath = request.path
         val incoming = parsed["streams"] as? List<*>
         val reply = linkedMapOf<String, Any>()
         if (incoming == null || incoming.isEmpty()) {
-            reply["eventPort"] = events
+            // UxPlay answers this plist with timingPort then eventPort 0 and nothing else.
+            // eventPort was the HTTP port in v12 (body 77). iOS 26 then tore the session
+            // down after RECORD and never sent the type 110 SETUP. Inventing that stream
+            // here is what v11 did; iOS tore that down immediately.
             reply["timingPort"] = ports.timingPort
+            reply["eventPort"] = 0
             if (clientTimingPort > 0) mirror?.noteTiming(request.remoteIp, clientTimingPort)
             DmrLog.i(
-                "airplay SETUP session only; reply eventPort=$events timingPort=${ports.timingPort} " +
-                    "(no streams until the next SETUP)",
+                "airplay SETUP session only; reply timingPort=${ports.timingPort} eventPort=0 " +
+                    "path=${request.path} combined=${parsed["combinedGetInfoWithControlSetup"]} " +
+                    "mirroring=${parsed["isScreenMirroringSession"]} " +
+                    "timingProtocol=${parsed["timingProtocol"]} et=${parsed["et"]}",
             )
         } else {
             if (ekey != null || parsed.containsKey("timingPort") || parsed.containsKey("eiv")) {
-                reply["eventPort"] = events
                 reply["timingPort"] = ports.timingPort
+                reply["eventPort"] = 0
                 if (clientTimingPort > 0) mirror?.noteTiming(request.remoteIp, clientTimingPort)
             }
             val secret = pairing.ecdhSecret(request.remoteIp)
@@ -333,11 +365,13 @@ class AirPlayHandler(
             reply["streams"] = streams
             DmrLog.i("airplay SETUP streams reply types=${streamTypes(streams)}")
         }
+        val body = BinaryPlist.write(reply)
+        DmrLog.i("airplay SETUP reply bytes=${body.size} plist=${describePlist(reply)}")
         return HttpResponse(
             200,
             "OK",
             linkedMapOf("Content-Type" to "application/x-apple-binary-plist"),
-            BinaryPlist.write(reply),
+            body,
         )
     }
 
@@ -448,7 +482,7 @@ class AirPlayHandler(
         if (value == null) return "null"
         if (depth > 4) return "…"
         return when (value) {
-            is ByteArray -> "bytes=${value.size}"
+            is ByteArray -> "bytes=${value.size}:${AirPlayKeys.hexPrefix(value, 8)}"
             is Map<*, *> -> value.entries.joinToString(prefix = "{", postfix = "}") { (key, item) ->
                 "$key=${describePlist(item, depth + 1)}"
             }
@@ -519,12 +553,23 @@ class AirPlayHandler(
         }
         if (request.protocol.startsWith("RTSP", ignoreCase = true)) {
             if (headers.keys.none { it.equals("Audio-Jack-Status", true) }) {
-                headers["Audio-Jack-Status"] = "Connected; type=digital"
+                headers["Audio-Jack-Status"] = "connected; type=digital"
             }
-            if (headers.keys.none { it.equals("Session", true) }) headers["Session"] = "CAFEBABE"
-            if (headers.keys.none { it.equals("Date", true) }) headers["Date"] = httpDate()
+            // UxPlay's mirror SETUP, GET /info and RECORD replies have no Session,
+            // Date or Transport header. Video /play still carries Session.
+            if (!mirrorHandshake(request) && headers.keys.none { it.equals("Session", true) }) {
+                headers["Session"] = "CAFEBABE"
+            }
+            if (!mirrorHandshake(request) && headers.keys.none { it.equals("Date", true) }) {
+                headers["Date"] = httpDate()
+            }
         }
         return HttpResponse(response.status, response.reason, headers, response.body)
+    }
+
+    private fun mirrorHandshake(request: HttpRequest): Boolean {
+        if (request.method == "SETUP" || request.method == "RECORD") return true
+        return request.method == "GET" && request.path == "/info"
     }
 
     private fun httpDate(): String {

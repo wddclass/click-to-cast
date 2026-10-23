@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.AttributeSet
 import android.view.View
 import android.widget.FrameLayout
+import com.wddclass.clicktocast.R
 
 /**
  * Capsule whose glass plate sits behind whatever you put inside.
@@ -26,7 +27,13 @@ class FrostedLayout @JvmOverloads constructor(
         plate.isDuplicateParentStateEnabled = true
         plate.layoutParams = LayoutParams(0, 0)
         addView(plate)
-        FrostedGlass.apply(plate)
+        val styled = context.obtainStyledAttributes(attrs, R.styleable.FrostedLayout)
+        val background = styled.getResourceId(
+            R.styleable.FrostedLayout_frostedBackground,
+            R.drawable.bg_frosted,
+        )
+        styled.recycle()
+        FrostedGlass.apply(plate, background)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

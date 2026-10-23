@@ -19,8 +19,8 @@ import com.wddclass.clicktocast.dlna.DmrLog
  * the translucent fill.
  */
 object FrostedGlass {
-    fun apply(plate: View) {
-        plate.setBackgroundResource(R.drawable.bg_frosted)
+    fun apply(plate: View, background: Int = R.drawable.bg_frosted) {
+        plate.setBackgroundResource(background)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             DmrLog.i("frosted chip: translucent material")
             return

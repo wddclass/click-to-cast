@@ -139,11 +139,32 @@ class AirPlayTest {
         assertEquals(AirPlayTexts.FEATURES_INT, parsed["features"])
         assertEquals("AppleTV3,2", parsed["model"])
         assertEquals(AirPlayTexts.SRCVERS, parsed["sourceVersion"])
-        assertEquals(4L, parsed["statusFlags"])
+        assertEquals(68L, parsed["statusFlags"])
+        assertEquals(true, parsed["keepAliveLowPower"])
+        assertEquals(0.0, parsed["initialVolume"] as Double, 0.001)
         assertEquals("投屏点我", parsed["name"])
+        val displays = parsed["displays"] as List<*>
+        val display = displays[0] as Map<*, *>
+        assertEquals(1920L, display["width"])
+        assertEquals(1080L, display["height"])
+        assertEquals("e0ff8a27-6738-3d56-8a16-cc53aacee925", display["uuid"])
+        assertFalse(parsed.containsKey("txtAirPlay"))
         val pk = parsed["pk"] as ByteArray
         assertTrue(pk.contentEquals(keys.edPublic))
-        val txt = String(parsed["txtAirPlay"] as ByteArray, Charsets.ISO_8859_1)
+        val qualifier = BinaryPlist.write(linkedMapOf("qualifier" to listOf("txtAirPlay")))
+        val txtInfo = handler.handle(
+            HttpRequest(
+                "GET",
+                "/info",
+                mapOf("cseq" to "1", "content-type" to "application/x-apple-binary-plist"),
+                qualifier,
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
+        val txtRoot = BinaryPlist.top(txtInfo!!.body) as Map<*, *>
+        assertFalse(txtRoot.containsKey("displays"))
+        val txt = String(txtRoot["txtAirPlay"] as ByteArray, Charsets.ISO_8859_1)
         assertTrue(txt.contains("features=${AirPlayTexts.FEATURES}"))
         assertTrue(txt.contains("pk=${keys.publicKeyHex}"))
         assertTrue(txt.contains("model=AppleTV3,2"))
@@ -291,7 +312,10 @@ class AirPlayTest {
                 "ekey" to ByteArray(72) { 1 },
                 "eiv" to ByteArray(16) { 2 },
                 "timingPort" to 7010,
+                "et" to 32,
+                "timingProtocol" to "NTP",
                 "isScreenMirroringSession" to true,
+                "combinedGetInfoWithControlSetup" to true,
             ),
         )
         val session = handler.handle(
@@ -305,10 +329,13 @@ class AirPlayTest {
             ),
         )
         assertEquals(200, session?.status)
-        val sessionPlist = BinaryPlist.top(session!!.body) as Map<*, *>
-        assertEquals(8192L, sessionPlist["eventPort"])
+        assertFalse(session!!.headers.containsKey("Transport"))
+        assertFalse(session.headers.containsKey("Session"))
+        val sessionPlist = BinaryPlist.top(session.body) as Map<*, *>
+        assertEquals(0L, sessionPlist["eventPort"])
         assertTrue((sessionPlist["timingPort"] as Long) > 0L)
         assertFalse(sessionPlist.containsKey("streams"))
+        assertFalse(sessionPlist.containsKey("timingProtocol"))
 
         val streamBody = BinaryPlist.write(
             linkedMapOf(
@@ -318,7 +345,7 @@ class AirPlayTest {
         val setup = handler.handle(
             HttpRequest(
                 "SETUP",
-                "/stream",
+                "/11462837071921564400",
                 mapOf("cseq" to "7", "content-type" to "application/x-apple-binary-plist"),
                 streamBody,
                 "192.168.123.8",
@@ -356,6 +383,7 @@ class AirPlayTest {
         assertEquals(200, record?.status)
         assertEquals("11025", record?.headers?.get("Audio-Latency"))
         assertEquals("connected; type=analog", record?.headers?.get("Audio-Jack-Status"))
+        assertFalse(record!!.headers.containsKey("Session"))
 
         val audioTeardown = BinaryPlist.write(
             linkedMapOf("streams" to listOf(linkedMapOf<String, Any>("type" to 96))),

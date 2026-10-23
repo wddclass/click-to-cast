@@ -36,9 +36,10 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|end"
-        android:layout_marginTop="22dp"
-        android:layout_marginEnd="32dp"
-        android:focusable="false">
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="16dp"
+        android:focusable="false"
+        app:frostedBackground="@drawable/bg_frosted_compact">
 
         <TextView
             android:id="@+id/net_speed"
@@ -46,13 +47,14 @@
             android:layout_height="wrap_content"
             android:contentDescription="@string/net_speed_desc"
             android:fontFeatureSettings="tnum"
-            android:paddingStart="16dp"
-            android:paddingTop="8dp"
-            android:paddingEnd="16dp"
-            android:paddingBottom="8dp"
+            android:includeFontPadding="false"
+            android:paddingStart="8dp"
+            android:paddingTop="3dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="3dp"
             android:text="0 KB/s"
             android:textColor="@color/text"
-            android:textSize="16sp" />
+            android:textSize="12sp" />
     </com.wddclass.clicktocast.ui.FrostedLayout>
 
     <FrameLayout

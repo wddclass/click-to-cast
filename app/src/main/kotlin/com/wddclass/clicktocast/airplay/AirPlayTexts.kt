@@ -115,52 +115,71 @@ object AirPlayTexts {
     }
 
     /**
-     * Binary plist for RTSP `GET /info`. Keys and the public key bytes match the mDNS TXT.
-     * statusFlags 4 is the usual "ready, no password" value. The feature mask still
-     * advertises screen mirroring so iOS lists the device; FairPlay is not implemented.
+     * Binary plist for RTSP `GET /info` with no qualifier.
+     * Mirrors UxPlay's full reply: statusFlags 68, display 1920×1080, audio types 100 and 101.
+     * The feature mask stays the v6 value iOS 26 lists.
      */
     fun infoPlist(name: String, deviceId: String, publicKey: ByteArray): ByteArray {
         val shown = name.trim().ifBlank { "投屏点我" }
         val identifier = pi(deviceId)
-        val publicKeyHex = AirPlayKeys.hex(publicKey)
-        val airplay = airplayTxt(deviceId, publicKeyHex)
-        val raop = raopTxt(deviceId, publicKeyHex)
+        val formats = 0x3fffffc
         val dict = linkedMapOf<String, Any>(
             "deviceID" to deviceId,
             "macAddress" to deviceId,
-            "features" to FEATURES_INT,
-            "model" to MODEL,
-            "protovers" to "1.0",
-            "protocolVersion" to "1.0",
-            "srcvers" to SRCVERS,
-            "sourceVersion" to SRCVERS,
-            "vv" to 2,
-            "statusFlags" to 4,
-            "name" to shown,
             "pk" to publicKey,
+            "features" to FEATURES_INT,
+            "name" to shown,
             "pi" to identifier,
-            "txtAirPlay" to packTxt(airplay),
-            "txtRAOP" to packTxt(raop),
-            "keepAliveLowPower" to false,
-            "keepAliveSendStatsAsBody" to false,
-            "audioFormats" to listOf(
-                linkedMapOf<String, Any>(
-                    "type" to 96,
-                    "audioInputFormats" to 0x01000000,
-                    "audioOutputFormats" to 0x01000000,
-                ),
-            ),
-            "audioLatencies" to listOf(
-                linkedMapOf<String, Any>(
-                    "type" to 96,
-                    "audioType" to "default",
-                    "inputLatencyMicros" to 0,
-                    "outputLatencyMicros" to 0,
-                ),
-            ),
+            "vv" to 2,
+            "statusFlags" to 68,
+            "keepAliveLowPower" to true,
+            "sourceVersion" to SRCVERS,
+            "keepAliveSendStatsAsBody" to true,
+            "model" to MODEL,
+            "initialVolume" to 0.0,
+            "audioLatencies" to listOf(audioLatency(100), audioLatency(101)),
+            "audioFormats" to listOf(audioFormat(100, formats), audioFormat(101, formats)),
+            "displays" to listOf(display()),
         )
         return BinaryPlist.write(dict)
     }
+
+    /** First `/info` asks only for the mDNS text blob. */
+    fun infoTxtOnly(which: String, deviceId: String, publicKey: ByteArray): ByteArray {
+        val publicKeyHex = AirPlayKeys.hex(publicKey)
+        val dict = linkedMapOf<String, Any>()
+        if (which == "txtAirPlay") dict["txtAirPlay"] = packTxt(airplayTxt(deviceId, publicKeyHex))
+        if (which == "txtRAOP") dict["txtRAOP"] = packTxt(raopTxt(deviceId, publicKeyHex))
+        return BinaryPlist.write(dict)
+    }
+
+    private fun audioLatency(type: Int): Map<String, Any> = linkedMapOf(
+        "type" to type,
+        "inputLatencyMicros" to 0,
+        "audioType" to "default",
+        "outputLatencyMicros" to false,
+    )
+
+    private fun audioFormat(type: Int, formats: Int): Map<String, Any> = linkedMapOf(
+        "audioOutputFormats" to formats,
+        "type" to type,
+        "audioInputFormats" to formats,
+    )
+
+    private fun display(): Map<String, Any> = linkedMapOf(
+        "uuid" to "e0ff8a27-6738-3d56-8a16-cc53aacee925",
+        "widthPhysical" to 0,
+        "heightPhysical" to 0,
+        "width" to 1920,
+        "height" to 1080,
+        "widthPixels" to 1920,
+        "heightPixels" to 1080,
+        "rotation" to false,
+        "refreshRate" to (1.0 / 60.0),
+        "maxFPS" to 30,
+        "overscanned" to false,
+        "features" to 14,
+    )
 
     fun serverInfo(deviceId: String): String = plist(
         """
