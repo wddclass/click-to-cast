@@ -163,7 +163,7 @@ object Mdns {
         val records = ArrayList<Record>(4)
         records += Record(service.type, PTR, goodbye, ttl, encodeName(instanceFqdn))
         records += Record(instanceFqdn, SRV, true, ttl, srvData(ad.port, hostFqdn))
-        records += Record(instanceFqdn, TXT, true, ttl, txtData(service.txt))
+        records += Record(instanceFqdn, TXT, true, ttl, AirPlayTexts.packTxt(service.txt))
         if (address != null) records += Record(hostFqdn, A, true, ttl, address)
         return records
     }
@@ -213,20 +213,6 @@ object Mdns {
         data[5] = (port and 0xFF).toByte()
         host.copyInto(data, 6)
         return data
-    }
-
-    private fun txtData(txt: Map<String, String>): ByteArray {
-        val out = ByteArrayOutputStream()
-        for ((key, value) in txt) {
-            if (key.isEmpty()) continue
-            var text = "$key=$value".toByteArray(Charsets.UTF_8)
-            if (text.size > 255) text = text.copyOf(255)
-            if (text.isEmpty()) continue
-            out.write(text.size)
-            out.write(text)
-        }
-        if (out.size() == 0) out.write(0)
-        return out.toByteArray()
     }
 
     private fun ipv4Bytes(text: String): ByteArray? {

@@ -105,17 +105,62 @@ class AirPlayTest {
         assertEquals("text/x-apple-plist+xml", server?.headers?.get("Content-Type"))
         assertTrue(String(server!!.body).contains("12:11:11:22:22:33"))
 
-        val deviceInfo = handler.handle(HttpRequest("GET", "/info", emptyMap(), ByteArray(0), "10.0.0.9"))
+        val deviceInfo = handler.handle(
+            HttpRequest(
+                "GET",
+                "/info",
+                mapOf(
+                    "cseq" to "0",
+                    "user-agent" to "AirPlay/425.1",
+                    "x-apple-protocolversion" to "1",
+                ),
+                ByteArray(0),
+                "192.168.123.8",
+                protocol = "RTSP/1.0",
+            ),
+        )
         assertEquals(200, deviceInfo?.status)
-        val plist = String(deviceInfo!!.body)
-        assertTrue(plist.contains("12:11:11:22:22:33"))
-        assertTrue(plist.contains("投屏点我"))
-        assertTrue(plist.contains("<key>features</key><integer>1515847927</integer>"))
+        assertEquals("application/x-apple-binary-plist", deviceInfo?.headers?.get("Content-Type"))
+        assertEquals("0", deviceInfo?.headers?.get("CSeq"))
+        val parsed = BinaryPlist.top(deviceInfo!!.body) as Map<*, *>
+        assertEquals("12:11:11:22:22:33", parsed["deviceID"])
+        assertEquals(AirPlayTexts.FEATURES_INT, parsed["features"])
+        assertEquals("AppleTV3,2", parsed["model"])
+        assertEquals(AirPlayTexts.SRCVERS, parsed["sourceVersion"])
+        assertEquals(4L, parsed["statusFlags"])
+        assertEquals("投屏点我", parsed["name"])
+        val pk = parsed["pk"] as ByteArray
+        assertTrue(pk.contentEquals(AirPlayTexts.publicKeyBytes()))
+        val txt = String(parsed["txtAirPlay"] as ByteArray, Charsets.ISO_8859_1)
+        assertTrue(txt.contains("features=${AirPlayTexts.FEATURES}"))
+        assertTrue(txt.contains("pk=${AirPlayTexts.PUBLIC_KEY}"))
+        assertTrue(txt.contains("model=AppleTV3,2"))
+        assertTrue(txt.contains("deviceid=12:11:11:22:22:33"))
+        val wire = String(deviceInfo.toBytes("RTSP/1.0"), Charsets.ISO_8859_1)
+        assertTrue(wire.startsWith("RTSP/1.0 200 OK\r\n"))
+        assertTrue(wire.contains("CSeq: 0\r\n"))
+        assertFalse(wire.contains("Connection: close"))
 
         val denied = handler.handle(HttpRequest("POST", "/pair-setup", emptyMap(), byteArrayOf(1), "10.0.0.9"))
         assertEquals(501, denied?.status)
         val verify = handler.handle(HttpRequest("POST", "/pair-verify", emptyMap(), byteArrayOf(1), "10.0.0.9"))
         assertEquals(501, verify?.status)
+        val fairplay = handler.handle(
+            HttpRequest("POST", "/fp-setup", emptyMap(), ByteArray(16), "192.168.123.8", protocol = "RTSP/1.0"),
+        )
+        assertEquals(501, fairplay?.status)
+
+        val upgraded = handler.handle(
+            HttpRequest(
+                "POST",
+                "/reverse",
+                mapOf("upgrade" to "PTTH/1.0", "connection" to "Upgrade"),
+                ByteArray(0),
+                "192.168.123.8",
+            ),
+        )
+        assertEquals(101, upgraded?.status)
+        assertEquals("Upgrade", upgraded?.headers?.get("Connection"))
     }
 
     @Test

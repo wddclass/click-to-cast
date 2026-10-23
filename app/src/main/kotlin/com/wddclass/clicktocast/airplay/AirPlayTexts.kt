@@ -20,15 +20,22 @@ data class AirPlayStatus(
  */
 object AirPlayTexts {
     const val SRCVERS = "220.68"
-    const val MODEL = "AppleTV5,3"
+
+    /** Apple TV 3,2 is the unauthenticated video-URL generation. 5,3 asks for FairPlay. */
+    const val MODEL = "AppleTV3,2"
+
+    /** Low 32 bits, then high 32 bits, as mDNS TXT writes them. */
     const val FEATURES = "0x5A7FFFF7,0x1E"
 
+    /** Same bits as one integer: (0x1E << 32) | 0x5A7FFFF7. /info must use this, not the low half. */
+    const val FEATURES_INT = 130367356919L
+
     /**
-     * Ed25519 public key from the public RFC 8032 test vector.
-     * The picker uses it as the TXT `pk` value. Pairing is not implemented,
-     * so this key is not a secret and cannot decrypt a mirrored stream.
+     * 32-byte Ed25519 public key from the public RFC 8032 test vector, hex for the TXT `pk`.
+     * The matching plist value is these bytes, not the hex text. Pairing is not implemented,
+     * so this key cannot decrypt a mirrored stream.
      */
-    const val PUBLIC_KEY = "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw="
+    const val PUBLIC_KEY = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
 
     fun macFromUuid(uuid: String): String {
         val hex = uuid.lowercase().filter { it in '0'..'9' || it in 'a'..'f' }
@@ -46,6 +53,30 @@ object AirPlayTexts {
             padded.substring(12, 16) + "-" +
             padded.substring(16, 20) + "-" +
             padded.substring(20, 32)
+    }
+
+    fun publicKeyBytes(): ByteArray {
+        val hex = PUBLIC_KEY
+        val out = ByteArray(hex.length / 2)
+        for (index in out.indices) {
+            out[index] = hex.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+        return out
+    }
+
+    /** DNS-SD TXT wire format: a length byte plus `key=value` for each entry. */
+    fun packTxt(txt: Map<String, String>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        for ((key, value) in txt) {
+            if (key.isEmpty()) continue
+            var text = "$key=$value".toByteArray(Charsets.UTF_8)
+            if (text.size > 255) text = text.copyOf(255)
+            if (text.isEmpty()) continue
+            out.write(text.size)
+            out.write(text)
+        }
+        if (out.size() == 0) out.write(0)
+        return out.toByteArray()
     }
 
     fun airplayTxt(deviceId: String): Map<String, String> = linkedMapOf(
@@ -94,31 +125,64 @@ object AirPlayTexts {
         return "$mac@$kept"
     }
 
-    /** What iOS reads from GET /info before it keeps a receiver in Control Center. */
-    fun info(name: String, deviceId: String): String = plist(
+    /**
+     * Binary plist for RTSP `GET /info`. Keys and the public key bytes match the mDNS TXT.
+     * statusFlags 4 is the usual "ready, no password" value. Screen mirroring is not offered
+     * as a display stream; FairPlay is not implemented.
+     */
+    fun infoPlist(name: String, deviceId: String): ByteArray {
+        val shown = name.trim().ifBlank { "投屏点我" }
+        val identifier = pi(deviceId)
+        val airplay = airplayTxt(deviceId)
+        val raop = raopTxt(deviceId)
+        val dict = linkedMapOf<String, Any>(
+            "deviceID" to deviceId,
+            "macAddress" to deviceId,
+            "features" to FEATURES_INT,
+            "model" to MODEL,
+            "protovers" to "1.0",
+            "protocolVersion" to "1.0",
+            "srcvers" to SRCVERS,
+            "sourceVersion" to SRCVERS,
+            "vv" to 2,
+            "statusFlags" to 4,
+            "name" to shown,
+            "pk" to publicKeyBytes(),
+            "pi" to identifier,
+            "txtAirPlay" to packTxt(airplay),
+            "txtRAOP" to packTxt(raop),
+            "keepAliveLowPower" to false,
+            "keepAliveSendStatsAsBody" to false,
+            "audioFormats" to listOf(
+                linkedMapOf<String, Any>(
+                    "type" to 96,
+                    "audioInputFormats" to 0x01000000,
+                    "audioOutputFormats" to 0x01000000,
+                ),
+            ),
+            "audioLatencies" to listOf(
+                linkedMapOf<String, Any>(
+                    "type" to 96,
+                    "audioType" to "default",
+                    "inputLatencyMicros" to 0,
+                    "outputLatencyMicros" to 0,
+                ),
+            ),
+        )
+        return BinaryPlist.write(dict)
+    }
+
+    fun serverInfo(deviceId: String): String = plist(
         """
         <key>deviceid</key><string>${escape(deviceId)}</string>
-        <key>features</key><integer>1515847927</integer>
+        <key>deviceID</key><string>${escape(deviceId)}</string>
+        <key>features</key><integer>$FEATURES_INT</integer>
         <key>model</key><string>$MODEL</string>
         <key>protovers</key><string>1.0</string>
         <key>srcvers</key><string>$SRCVERS</string>
         <key>sourceVersion</key><string>$SRCVERS</string>
         <key>vv</key><integer>2</integer>
         <key>statusFlags</key><integer>4</integer>
-        <key>name</key><string>${escape(name)}</string>
-        <key>pk</key><string>$PUBLIC_KEY</string>
-        <key>pi</key><string>${escape(pi(deviceId))}</string>
-        """.trimIndent(),
-    )
-
-    fun serverInfo(deviceId: String): String = plist(
-        """
-        <key>deviceid</key><string>${escape(deviceId)}</string>
-        <key>features</key><integer>1515847927</integer>
-        <key>model</key><string>$MODEL</string>
-        <key>protovers</key><string>1.0</string>
-        <key>srcvers</key><string>$SRCVERS</string>
-        <key>vv</key><integer>2</integer>
         """.trimIndent(),
     )
 
@@ -250,9 +314,160 @@ $body
     private fun num(value: Double): String = String.format(Locale.US, "%.3f", value)
 }
 
-/** Enough of Apple's binary plist to read the dictionary POST /play sends. */
+/** Enough of Apple's binary plist to read POST /play and to write GET /info. */
 internal object BinaryPlist {
     fun top(bytes: ByteArray): Any? = parse(bytes)
+
+    fun write(root: Any?): ByteArray {
+        val nodes = ArrayList<Node>()
+        fun add(value: Any?): Int {
+            val index = nodes.size
+            nodes.add(Node.Pending)
+            nodes[index] = when (value) {
+                is Boolean -> Node.Bool(value)
+                is Int -> Node.IntNum(value.toLong())
+                is Long -> Node.IntNum(value)
+                is Double -> Node.Real(value)
+                is Float -> Node.Real(value.toDouble())
+                is ByteArray -> Node.Data(value)
+                is String -> if (value.all { it.code in 0..127 }) Node.Ascii(value) else Node.Utf16(value)
+                is List<*> -> Node.Array(value.map { add(it) }.toIntArray())
+                is Map<*, *> -> {
+                    val keys = value.keys.map { add(it?.toString() ?: "") }.toIntArray()
+                    val vals = value.values.map { add(it) }.toIntArray()
+                    Node.Dict(keys, vals)
+                }
+                else -> Node.Ascii(value?.toString() ?: "")
+            }
+            return index
+        }
+        add(root)
+        val refSize = when {
+            nodes.size <= 0xFF -> 1
+            nodes.size <= 0xFFFF -> 2
+            else -> 4
+        }
+        val objects = nodes.map { encode(it, refSize) }
+        var cursor = 8
+        val offsets = IntArray(objects.size)
+        for (index in objects.indices) {
+            offsets[index] = cursor
+            cursor += objects[index].size
+        }
+        val offsetSize = when {
+            cursor <= 0xFF -> 1
+            cursor <= 0xFFFF -> 2
+            else -> 4
+        }
+        val out = java.io.ByteArrayOutputStream()
+        out.write("bplist00".toByteArray(Charsets.US_ASCII))
+        for (objectBytes in objects) out.write(objectBytes)
+        val tableAt = cursor
+        for (offset in offsets) writeBe(out, offset.toLong(), offsetSize)
+        val trailer = ByteArray(32)
+        trailer[6] = offsetSize.toByte()
+        trailer[7] = refSize.toByte()
+        putBe(trailer, 8, nodes.size.toLong(), 8)
+        putBe(trailer, 24, tableAt.toLong(), 8)
+        out.write(trailer)
+        return out.toByteArray()
+    }
+
+    private fun encode(node: Node, refSize: Int): ByteArray = when (node) {
+        Node.Pending -> byteArrayOf(0)
+        is Node.Bool -> byteArrayOf(if (node.value) 0x09 else 0x08)
+        is Node.IntNum -> intObject(node.value)
+        is Node.Real -> {
+            val bits = java.lang.Double.doubleToRawLongBits(node.value)
+            val out = ByteArray(9)
+            out[0] = 0x23
+            putBe(out, 1, bits, 8)
+            out
+        }
+        is Node.Data -> bytesObject(0x40, node.value)
+        is Node.Ascii -> bytesObject(0x50, node.value.toByteArray(Charsets.US_ASCII))
+        is Node.Utf16 -> bytesObject(0x60, node.value.toByteArray(Charsets.UTF_16BE), node.value.length)
+        is Node.Array -> refsObject(0xA0, node.refs, refSize)
+        is Node.Dict -> {
+            val refs = IntArray(node.keys.size + node.values.size)
+            node.keys.copyInto(refs, 0)
+            node.values.copyInto(refs, node.keys.size)
+            refsObject(0xD0, refs, refSize, node.keys.size)
+        }
+    }
+
+    private fun intObject(value: Long): ByteArray {
+        val width = when {
+            value in 0..0xFF -> 1
+            value in 0..0xFFFF -> 2
+            value in 0..0xFFFF_FFFFL -> 4
+            else -> 8
+        }
+        val marker = when (width) {
+            1 -> 0x10
+            2 -> 0x11
+            4 -> 0x12
+            else -> 0x13
+        }
+        val out = ByteArray(1 + width)
+        out[0] = marker.toByte()
+        putBe(out, 1, value, width)
+        return out
+    }
+
+    private fun bytesObject(markerBase: Int, payload: ByteArray, count: Int = payload.size): ByteArray {
+        val head = countHead(markerBase, count)
+        val out = ByteArray(head.size + payload.size)
+        head.copyInto(out, 0)
+        payload.copyInto(out, head.size)
+        return out
+    }
+
+    private fun refsObject(markerBase: Int, refs: IntArray, refSize: Int, count: Int = refs.size): ByteArray {
+        val head = countHead(markerBase, count)
+        val out = ByteArray(head.size + refs.size * refSize)
+        head.copyInto(out, 0)
+        var cursor = head.size
+        for (ref in refs) {
+            putBe(out, cursor, ref.toLong(), refSize)
+            cursor += refSize
+        }
+        return out
+    }
+
+    private fun countHead(markerBase: Int, count: Int): ByteArray {
+        if (count < 15) return byteArrayOf((markerBase or count).toByte())
+        val length = intObject(count.toLong())
+        val out = ByteArray(1 + length.size)
+        out[0] = (markerBase or 0x0F).toByte()
+        length.copyInto(out, 1)
+        return out
+    }
+
+    private fun writeBe(out: java.io.ByteArrayOutputStream, value: Long, width: Int) {
+        val bytes = ByteArray(width)
+        putBe(bytes, 0, value, width)
+        out.write(bytes)
+    }
+
+    private fun putBe(target: ByteArray, offset: Int, value: Long, width: Int) {
+        for (index in 0 until width) {
+            val shift = (width - 1 - index) * 8
+            target[offset + index] = ((value ushr shift) and 0xFF).toByte()
+        }
+    }
+
+    private sealed class Node {
+        data object Pending : Node()
+        data class Bool(val value: Boolean) : Node()
+        data class IntNum(val value: Long) : Node()
+        data class Real(val value: Double) : Node()
+        data class Data(val value: ByteArray) : Node()
+        data class Ascii(val value: String) : Node()
+        data class Utf16(val value: String) : Node()
+        data class Array(val refs: IntArray) : Node()
+        data class Dict(val keys: IntArray, val values: IntArray) : Node()
+    }
 
     private fun parse(bytes: ByteArray): Any? {
         if (bytes.size < 40) return null

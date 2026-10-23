@@ -7,6 +7,7 @@ import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -17,6 +18,7 @@ class HttpRequest(
     val body: ByteArray,
     val remoteIp: String,
     val query: String = "",
+    val protocol: String = "HTTP/1.1",
 ) {
     fun header(name: String): String? = headers[name.lowercase()]
 }
@@ -27,20 +29,22 @@ class HttpResponse(
     val headers: Map<String, String> = emptyMap(),
     val body: ByteArray = ByteArray(0),
 ) {
-    fun toBytes(): ByteArray {
+    fun toBytes(protocol: String = "HTTP/1.1"): ByteArray {
+        val wire = if (protocol.isBlank()) "HTTP/1.1" else protocol
+        val rtsp = wire.startsWith("RTSP", ignoreCase = true)
         val merged = linkedMapOf<String, String>()
         headers.forEach { (key, value) -> merged[key] = value }
         if (merged.keys.none { it.equals("Content-Length", true) }) {
             merged["Content-Length"] = body.size.toString()
         }
-        if (merged.keys.none { it.equals("Connection", true) }) {
+        if (!rtsp && status != 101 && merged.keys.none { it.equals("Connection", true) }) {
             merged["Connection"] = "close"
         }
         if (merged.keys.none { it.equals("Server", true) }) {
-            merged["Server"] = "ClickToCast UPnP/1.0"
+            merged["Server"] = if (rtsp) "AirTunes/220.68" else "ClickToCast UPnP/1.0"
         }
         val head = buildString {
-            append("HTTP/1.1 ").append(status).append(' ').append(reason).append("\r\n")
+            append(wire).append(' ').append(status).append(' ').append(reason).append("\r\n")
             for ((key, value) in merged) {
                 append(key).append(": ").append(value).append("\r\n")
             }
@@ -136,18 +140,65 @@ class MiniHttpServer(
         val remote = client.inetAddress?.hostAddress ?: ""
         val input = BufferedInputStream(client.getInputStream())
         val output = client.getOutputStream()
-        val request = readRequest(input, remote) {
-            output.write(CONTINUE)
+        while (true) {
+            val request = try {
+                readRequest(input, remote) {
+                    output.write(CONTINUE)
+                    output.flush()
+                }
+            } catch (_: SocketTimeoutException) {
+                break
+            } ?: break
+            val response = try {
+                handler(request)
+            } catch (error: Throwable) {
+                DmrLog.i("http handler failed: ${error.javaClass.simpleName}: ${error.message}")
+                HttpResponse(500, "Internal Server Error", emptyMap(), "error".toByteArray())
+            }
+            output.write(response.toBytes(request.protocol))
             output.flush()
-        } ?: return
-        val response = try {
-            handler(request)
-        } catch (error: Throwable) {
-            DmrLog.i("http handler failed: ${error.javaClass.simpleName}: ${error.message}")
-            HttpResponse(500, "Internal Server Error", emptyMap(), "error".toByteArray())
+            if (response.status == 101) {
+                holdUntilClose(client, input)
+                break
+            }
+            if (shouldClose(request, response)) break
+            client.soTimeout = if (request.protocol.startsWith("RTSP", ignoreCase = true)) 30_000 else 8_000
         }
-        output.write(response.toBytes())
-        output.flush()
+    }
+
+    /** RTSP stays open for the next CSeq. HTTP closes unless the client asked to keep it. */
+    private fun shouldClose(request: HttpRequest, response: HttpResponse): Boolean {
+        val responseConnection = headerValue(response.headers, "connection")
+        if (responseConnection.contains("close")) return true
+        if (responseConnection.contains("keep-alive") || responseConnection.contains("upgrade")) return false
+        val requestConnection = request.header("connection")?.lowercase() ?: ""
+        if (requestConnection.contains("close")) return true
+        if (request.protocol.startsWith("RTSP", ignoreCase = true)) return false
+        if (requestConnection.contains("keep-alive")) return false
+        return true
+    }
+
+    private fun headerValue(headers: Map<String, String>, name: String): String {
+        for ((key, value) in headers) {
+            if (key.equals(name, ignoreCase = true)) return value.lowercase()
+        }
+        return ""
+    }
+
+    private fun holdUntilClose(client: Socket, input: InputStream) {
+        try {
+            client.soTimeout = 30_000
+            val buffer = ByteArray(1024)
+            while (true) {
+                val read = try {
+                    input.read(buffer)
+                } catch (_: SocketTimeoutException) {
+                    continue
+                }
+                if (read < 0) break
+            }
+        } catch (_: Exception) {
+        }
     }
 
     private fun readRequest(input: InputStream, remoteIp: String, onContinue: () -> Unit): HttpRequest? {
@@ -173,7 +224,8 @@ class MiniHttpServer(
             else -> ByteArray(0)
         }
         val (path, query) = splitTarget(parts[1])
-        return HttpRequest(parts[0].uppercase(), path, headers, body, remoteIp, query)
+        val protocol = if (parts.size >= 3 && parts[2].isNotBlank()) parts[2] else "HTTP/1.1"
+        return HttpRequest(parts[0].uppercase(), path, headers, body, remoteIp, query, protocol)
     }
 
     private fun splitTarget(target: String): Pair<String, String> {
